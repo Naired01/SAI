@@ -146,11 +146,17 @@ func main() {
 	// 7. Crear token (POST con CSRF)
 	fmt.Println("[7] POST /api/v1/tokens (con CSRF)")
 	r = withCSRF(client, "POST", base+"/api/v1/tokens", csrf, map[string]any{
-		"label":     "smoke-test",
-		"max_uses":  1,
+		"label":     "smoke-test-bundle",
+		"max_uses":  5, // suficiente para descargar 3 bundles + dejar margen
 		"ttl_hours": 24,
 	})
 	check("crear token", r.status, 201, r.body)
+	var tokResp struct {
+		Plain string `json:"plain"`
+	}
+	_ = json.Unmarshal(r.body, &tokResp)
+	enrollToken := tokResp.Plain
+	fmt.Printf("         enroll token (24 chars): %s...\n", enrollToken[:min(24, len(enrollToken))])
 
 	// 8. Listar tokens
 	fmt.Println("[8] GET /api/v1/tokens")
@@ -208,6 +214,33 @@ func main() {
 	r = get("/api/v1/auth/me")
 	check("auth/me post-logout", r.status, 401, r.body)
 
+	// 15-17. Descarga de bundle ZIP para los 3 OS principales
+	fmt.Println()
+	fmt.Println("[15-17] Descarga de bundles (binarios del agente)")
+	for _, tgt := range []struct{ os, arch string }{
+		{"windows", "amd64"},
+		{"linux", "amd64"},
+		{"darwin", "amd64"},
+	} {
+		r = downloadBundle(base, enrollToken, tgt.os, tgt.arch)
+		ct := r.ct
+		expectedCT := "application/zip"
+		ok := r.status == 200 && len(r.body) > 1024 && (ct == expectedCT || strings.Contains(ct, "zip"))
+		if ok {
+			fmt.Printf("  [PASS] bundle %s/%s -> %d bytes, ct=%s\n", tgt.os, tgt.arch, len(r.body), ct)
+			pass++
+		} else {
+			fmt.Printf("  [FAIL] bundle %s/%s -> status=%d ct=%s size=%d. body: %s\n",
+				tgt.os, tgt.arch, r.status, ct, len(r.body), truncate(string(r.body), 200))
+			fail++
+		}
+	}
+
+	// 18. Token sin canjear no debe servir bundle (otro token random)
+	fmt.Println("[18] /api/v1/agents/download con token inválido (debe ser 403)")
+	r = downloadBundleRaw(base+"/api/v1/agents/download?token=invalid-token-xxx&os=windows&arch=amd64")
+	check("download token inválido", r.status, 403, r.body)
+
 	// Resumen
 	fmt.Println()
 	fmt.Println("===============================================")
@@ -222,6 +255,23 @@ func main() {
 // -----------------------------------------------------------------------------
 // helpers
 // -----------------------------------------------------------------------------
+
+// downloadBundle hace GET al endpoint de descarga del agente y devuelve
+// el ZIP como bytes (junto con status y content-type).
+func downloadBundle(base, token, osName, arch string) apiResp {
+	return downloadBundleRaw(base + "/api/v1/agents/download?token=" + token + "&os=" + osName + "&arch=" + arch)
+}
+
+func downloadBundleRaw(urlStr string) apiResp {
+	req, _ := http.NewRequest("GET", urlStr, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return apiResp{status: -1, body: []byte(err.Error())}
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return apiResp{status: resp.StatusCode, body: b, ct: resp.Header.Get("Content-Type")}
+}
 
 func do(client *http.Client, method, url string, body io.Reader) apiResp {
 	req, err := http.NewRequest(method, url, body)
