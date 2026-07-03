@@ -65,7 +65,14 @@ docker compose exec server /app/sai-server --bootstrap \
 
 ## Verificación end-to-end
 
-Una vez el server esté corriendo (Docker o local), podés correr el smoke test que valida 14 endpoints incluyendo auth, CSRF, CRUD y logout:
+**Opción automática (Docker):** corre build → up → healthcheck → bootstrap → smoke test en un solo comando:
+
+```bash
+./scripts/verify-docker.sh        # bash
+.\scripts\verify-docker.ps1       # PowerShell
+```
+
+**Opción manual:** una vez el server esté corriendo (Docker o local), podés correr el smoke test que valida 14 endpoints incluyendo auth, CSRF, CRUD y logout:
 
 ```bash
 # Compilar
