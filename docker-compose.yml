@@ -1,0 +1,60 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sai}
+      POSTGRES_DB: ${POSTGRES_DB:-sai}
+    volumes:
+      - sai_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sai} -d ${POSTGRES_DB:-sai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - sai-net
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${SAI_VERSION:-dev}
+        COMMIT: ${SAI_COMMIT:-unknown}
+        BUILD_TIME: ${SAI_BUILD_TIME:-unknown}
+    image: ghcr.io/naired01/sai:${SAI_VERSION:-dev}
+    container_name: sai-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SAI_ENV: ${SAI_ENV:-production}
+      SAI_BIND: ":8080"
+      SAI_PUBLIC_URL: ${SAI_PUBLIC_URL}
+      SAI_DB_URL: ${SAI_DB_URL}
+      SAI_JWT_SECRET: ${SAI_JWT_SECRET}
+      SAI_AGENT_JWT_SECRET: ${SAI_AGENT_JWT_SECRET}
+      SAI_BUNDLE_DIR: /app/dist
+      SAI_WEB_DIST: /app/web
+      SAI_DEFAULT_LANG: ${SAI_DEFAULT_LANG:-es}
+      SAI_LOG_LEVEL: ${SAI_LOG_LEVEL:-info}
+      SAI_BOOTSTRAP_EMAIL: ${SAI_BOOTSTRAP_EMAIL:-}
+      SAI_BOOTSTRAP_PASSWORD: ${SAI_BOOTSTRAP_PASSWORD:-}
+    ports:
+      - "8080:8080"
+    volumes:
+      - sai_data:/app/data
+    networks:
+      - sai-net
+
+volumes:
+  sai_pgdata:
+  sai_data:
+
+networks:
+  sai-net:
+    driver: bridge

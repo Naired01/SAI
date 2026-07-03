@@ -1,0 +1,52 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/vendor/
+/coverage.txt
+*.coverprofile
+/build/
+/dist/
+
+# Local env / secrets
+.env
+.env.local
+*.local.yaml
+secrets.yaml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Node (panel)
+web/node_modules/
+web/dist/
+web/.vite/
+web/.env.local
+web/.env.*.local
+web/npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Generated bundles (built by CI; kept locally for dev only)
+# Comment out the next line if you build the agent bundles locally.
+/dist/*.exe
+/dist/*.bin
+
+# Local data
+/data/
+*.sqlite
+*.db

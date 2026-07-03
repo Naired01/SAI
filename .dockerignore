@@ -1,0 +1,14 @@
+# Build stage output
+bin/
+node_modules/
+
+# Editor
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local
+*.log

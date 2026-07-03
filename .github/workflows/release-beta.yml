@@ -1,0 +1,238 @@
+name: release-beta
+
+# Publica binarios + imagen Docker en GitHub Releases y ghcr.io cuando
+# se pushea un tag con sufijo "-beta" (ej: v0.1.0-beta1).
+on:
+  push:
+    tags:
+      - 'v*+beta*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    name: Build cross-platform binaries + image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build web dist
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Determine version
+        id: ver
+        run: |
+          echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          echo "short=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Build sai-server (linux/amd64 + linux/arm64)
+        run: |
+          mkdir -p bin
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
+              go build -trimpath \
+              -ldflags="-s -w -X github.com/Naired01/SAI/internal/version.Version=${{ steps.ver.outputs.version }} \
+                        -X github.com/Naired01/SAI/internal/version.Commit=${GITHUB_SHA::8} \
+                        -X github.com/Naired01/SAI/internal/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              -o bin/sai-server-linux-$arch ./cmd/server
+          done
+
+      - name: Cross-build sai-agent (6 targets)
+        run: |
+          mkdir -p dist
+          for target in "windows amd64 .exe" "windows arm64 .exe" \
+                        "linux amd64" "linux arm64" \
+                        "darwin amd64" "darwin arm64"; do
+            set -- $target
+            CGO_ENABLED=0 GOOS=$1 GOARCH=$2 \
+              go build -trimpath \
+              -ldflags="-s -w -X github.com/Naired01/SAI/internal/version.Version=${{ steps.ver.outputs.version }}" \
+              -o dist/sai-agent-$1-$2$3 ./cmd/agent
+          done
+
+      - name: Build sai-agent-installer
+        run: |
+          CGO_ENABLED=0 go build -trimpath \
+            -ldflags="-s -w -X github.com/Naired01/SAI/internal/version.Version=${{ steps.ver.outputs.version }}" \
+            -o bin/sai-agent-installer-linux-amd64 ./cmd/agent-installer
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push Docker image (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/naired01/sai:${{ steps.ver.outputs.version }}
+            ghcr.io/naired01/sai:${{ steps.ver.outputs.short }}
+            ghcr.io/naired01/sai:latest-beta
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
+            COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ github.event.repository.updated_at }}
+          provenance: false
+
+      - name: Upload artifacts (binaries)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sai-release-binaries
+          path: |
+            bin/sai-server-linux-amd64
+            bin/sai-server-linux-arm64
+            bin/sai-agent-installer-linux-amd64
+            dist/sai-agent-*
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sai-release-binaries
+          path: dist
+
+      - name: Generate notes
+        id: notes
+        run: |
+          {
+            echo "## SAI ${{ github.ref_name }}"
+            echo ""
+            echo "### Imágenes Docker"
+            echo ""
+            echo '```'
+            echo "docker pull ghcr.io/naired01/sai:${{ github.ref_name }}"
+            echo '```'
+            echo ""
+            echo "### Binarios adjuntos"
+            echo ""
+            echo "- \`sai-server-linux-amd64\` — servidor para Linux x86_64"
+            echo "- \`sai-server-linux-arm64\` — servidor para Linux ARM64"
+            echo "- \`sai-agent-windows-amd64.exe\` — agente Windows x86_64"
+            echo "- \`sai-agent-windows-arm64.exe\` — agente Windows ARM64"
+            echo "- \`sai-agent-linux-amd64\` — agente Linux x86_64"
+            echo "- \`sai-agent-linux-arm64\` — agente Linux ARM64"
+            echo "- \`sai-agent-darwin-amd64\` — agente macOS Intel"
+            echo "- \`sai-agent-darwin-arm64\` — agente macOS Apple Silicon"
+            echo "- \`sai-agent-installer-linux-amd64\` — CLI offline para generar bundle"
+            echo ""
+            echo "### Quickstart"
+            echo ""
+            echo '```bash'
+            echo "# Levantar el server (Docker)"
+            echo "docker run -d --name sai -p 8080:8080 \\"
+            echo "  -e SAI_PUBLIC_URL=https://sai.tudominio.com \\"
+            echo "  -e SAI_DB_URL=postgres://... \\"
+            echo "  -e SAI_JWT_SECRET=\$(openssl rand -hex 32) \\"
+            echo "  -e SAI_AGENT_JWT_SECRET=\$(openssl rand -hex 32) \\"
+            echo "  ghcr.io/naired01/sai:${{ github.ref_name }}"
+            echo ""
+            echo "# Bootstrap admin (primer arranque)"
+            echo "docker exec -it sai /app/sai-server --bootstrap \\"
+            echo "  --admin-email admin@tudominio.com \\"
+            echo "  --admin-password 'CambiaEsto#2026'"
+            echo '```'
+            echo ""
+            echo "### Notas"
+            echo ""
+            echo "Esta es una release **BETA**. La ejecución real de comandos se habilita en Fase 3; los jobs quedan en estado \`pending\` hasta entonces."
+          } > release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: release_notes.md
+          prerelease: true
+          files: |
+            dist/sai-server-linux-amd64
+            dist/sai-server-linux-arm64
+            dist/sai-agent-windows-amd64.exe
+            dist/sai-agent-windows-arm64.exe
+            dist/sai-agent-linux-amd64
+            dist/sai-agent-linux-arm64
+            dist/sai-agent-darwin-amd64
+            dist/sai-agent-darwin-arm64
+            dist/sai-agent-installer-linux-amd64
+
+  smoke:
+    name: Smoke test (server boots + /api/v1/health)
+    needs: build
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sai
+          POSTGRES_PASSWORD: sai
+          POSTGRES_DB: sai
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sai"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SAI_ENV: development
+      SAI_BIND: ":8080"
+      SAI_DB_URL: postgres://sai:sai@localhost:5432/sai?sslmode=disable
+      SAI_JWT_SECRET: dev-jwt-secret-must-be-at-least-32-chars-long-xxx
+      SAI_AGENT_JWT_SECRET: dev-agent-jwt-secret-must-be-at-least-32-chars
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Build server
+        run: CGO_ENABLED=0 go build -trimpath -o sai-server ./cmd/server
+
+      - name: Run server
+        run: |
+          ./sai-server &
+          SERVER_PID=$!
+          sleep 5
+          echo "--- /api/v1/health ---"
+          curl -sf http://localhost:8080/api/v1/health || (cat /tmp/sai.log; exit 1)
+          echo
+          echo "--- /api/v1/version ---"
+          curl -sf http://localhost:8080/api/v1/version
+          echo
+          kill $SERVER_PID 2>/dev/null || true
