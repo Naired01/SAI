@@ -30,9 +30,10 @@ import (
 
 func main() {
 	var (
-		bootstrap       = flag.Bool("bootstrap", false, "Crear admin inicial si la tabla users está vacía")
-		adminEmail      = flag.String("admin-email", "", "Email del admin a crear en --bootstrap")
-		adminPassword   = flag.String("admin-password", "", "Password del admin a crear en --bootstrap")
+		bootstrap       = flag.Bool("bootstrap", false, "Crear o resetear admin. Comportamiento idempotente: si la tabla users está vacía lo crea; si el email coincide con un admin existente resetea su password; si hay otro admin requiere --force-reset")
+		forceReset      = flag.Bool("force-reset", false, "En --bootstrap, si existe un admin con email distinto al solicitado, lo reemplaza (¡peligroso!)")
+		adminEmail      = flag.String("admin-email", "", "Email del admin a crear/resetear en --bootstrap")
+		adminPassword   = flag.String("admin-password", "", "Password del admin a crear/resetear en --bootstrap")
 		showVersion     = flag.Bool("version", false, "Muestra la versión y sale")
 	)
 	flag.Parse()
@@ -102,7 +103,7 @@ func main() {
 			logger.Error("--bootstrap requires --admin-email and --admin-password (or env vars SAI_BOOTSTRAP_EMAIL/SAI_BOOTSTRAP_PASSWORD)")
 			os.Exit(1)
 		}
-		if err := bootstrapAdmin(ctx, pool.Pool, email, password); err != nil {
+		if err := bootstrapAdmin(ctx, pool.Pool, email, password, *forceReset); err != nil {
 			logger.Error("bootstrap admin failed", "err", err)
 			os.Exit(1)
 		}
@@ -219,31 +220,91 @@ func redactDSN(dsn string) string {
 	return dsn
 }
 
-func bootstrapAdmin(ctx context.Context, pool *pgxpool.Pool, email, password string) error {
-	// ¿ya existe un admin?
-	var count int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
-		return err
-	}
-	if count > 0 {
-		return fmt.Errorf("users table is not empty; refusing to bootstrap")
-	}
+func bootstrapAdmin(ctx context.Context, pool *pgxpool.Pool, email, password string, forceReset bool) error {
 	hash, err := auth.HashPassword(password)
 	if err != nil {
 		return err
 	}
-	_, err = pool.Exec(ctx, `
-		INSERT INTO users (email, password_hash, role, is_active)
-		VALUES ($1, $2, 'admin', TRUE)
-	`, email, hash)
+
+	// Listar usuarios existentes para decidir el camino.
+	rows, err := pool.Query(ctx, `SELECT email FROM users ORDER BY created_at`)
 	if err != nil {
 		return err
 	}
-	// Audit (como "system")
-	_, _ = pool.Exec(ctx, `
-		INSERT INTO audit_events (actor_type, actor_label, action, metadata)
-		VALUES ('system', 'system', 'system.bootstrap_admin', jsonb_build_object('email', $1::text))
-	`, email)
+	var existing []string
+	for rows.Next() {
+		var e string
+		if err := rows.Scan(&e); err != nil {
+			rows.Close()
+			return err
+		}
+		existing = append(existing, e)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	switch len(existing) {
+	case 0:
+		// DB fresca → crear admin.
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO users (email, password_hash, role, is_active)
+			VALUES ($1, $2, 'admin', TRUE)
+		`, email, hash); err != nil {
+			return err
+		}
+		_, _ = pool.Exec(ctx, `
+			INSERT INTO audit_events (actor_type, actor_label, action, metadata)
+			VALUES ('system', 'system', 'system.bootstrap_admin', jsonb_build_object('email', $1::text, 'mode', 'create'))
+		`, email)
+
+	case 1:
+		if existing[0] == email {
+			// Mismo email → resetear password (olvido de contraseña).
+			if _, err := pool.Exec(ctx, `
+				UPDATE users SET password_hash = $1, updated_at = now(), is_active = TRUE
+				WHERE email = $2
+			`, hash, email); err != nil {
+				return err
+			}
+			_, _ = pool.Exec(ctx, `
+				INSERT INTO audit_events (actor_type, actor_label, action, metadata)
+				VALUES ('system', 'system', 'system.bootstrap_admin', jsonb_build_object('email', $1::text, 'mode', 'reset_password'))
+			`, email)
+		} else {
+			if !forceReset {
+				return fmt.Errorf("users table already has admin %q; use --force-reset to replace it (this will DELETE the existing admin)", existing[0])
+			}
+			// Force: reemplazar el admin existente.
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			if _, err := tx.Exec(ctx, `DELETE FROM users WHERE email = $1`, existing[0]); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO users (email, password_hash, role, is_active)
+				VALUES ($1, $2, 'admin', TRUE)
+			`, email, hash); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO audit_events (actor_type, actor_label, action, metadata)
+				VALUES ('system', 'system', 'system.bootstrap_admin', jsonb_build_object('email', $1::text, 'mode', 'force_replace', 'replaced', $2::text))
+			`, email, existing[0]); err != nil {
+				return err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return err
+			}
+		}
+
+	default:
+		return fmt.Errorf("users table has %d users; bootstrap only works on a fresh DB (1 user). Use SQL to manage existing users", len(existing))
+	}
 	return nil
 }
 

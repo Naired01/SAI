@@ -58,6 +58,11 @@ docker compose exec server /app/sai-server --bootstrap \
 # Panel: http://localhost:8080
 ```
 
+> **`--bootstrap` es idempotente**:
+> - DB vacía → crea el admin.
+> - Email ya existe → resetea el password (útil para recuperación).
+> - Email distinto al existente → error. Usa `--force-reset` para reemplazar (¡borra el admin previo!).
+
 ## Estructura
 
 ```
