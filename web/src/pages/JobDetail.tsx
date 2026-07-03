@@ -26,7 +26,7 @@ export function JobDetail() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['job', id] }),
   })
 
-  if (!job) return <div className="text-slate-500 text-sm">{t('common.loading')}</div>
+  if (!job) return <div className="text-slate-500 dark:text-slate-400 text-sm">{t('common.loading')}</div>
 
   const canCancel = ['pending', 'dispatching', 'running'].includes(job.status)
 
@@ -58,7 +58,7 @@ export function JobDetail() {
       </div>
 
       <div className="card overflow-hidden">
-        <h2 className="font-semibold p-3 border-b border-slate-200">{t('jobs.detail.items')}</h2>
+        <h2 className="font-semibold p-3 border-b border-slate-200 dark:border-slate-700">{t('jobs.detail.items')}</h2>
         <table className="table">
           <thead>
             <tr>
@@ -73,16 +73,16 @@ export function JobDetail() {
           </thead>
           <tbody>
             {!items?.items?.length ? (
-              <tr><td colSpan={7} className="text-center text-slate-500">{t('jobs.items.empty')}</td></tr>
+              <tr><td colSpan={7} className="text-center text-slate-500 dark:text-slate-400">{t('jobs.items.empty')}</td></tr>
             ) : items.items.map((it) => (
-              <tr key={it.id} className="hover:bg-slate-50">
+              <tr key={it.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/40">
                 <td className="font-mono text-xs">{it.agent_hostname || it.agent_id}</td>
                 <td className="text-xs">{it.agent_os}</td>
-                <td><span className="badge bg-slate-100 text-slate-700">{it.status}</span></td>
+                <td><span className="badge bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200">{it.status}</span></td>
                 <td className="text-xs">{it.exit_code ?? '—'}</td>
-                <td className="text-xs text-slate-500">{it.started_at || '—'}</td>
-                <td className="text-xs text-slate-500">{it.completed_at || '—'}</td>
-                <td className="text-xs text-red-700 truncate max-w-[200px]">{it.error_msg}</td>
+                <td className="text-xs text-slate-500 dark:text-slate-400">{it.started_at || '—'}</td>
+                <td className="text-xs text-slate-500 dark:text-slate-400">{it.completed_at || '—'}</td>
+                <td className="text-xs text-red-700 dark:text-red-400 truncate max-w-[200px]">{it.error_msg}</td>
               </tr>
             ))}
           </tbody>
@@ -95,7 +95,7 @@ export function JobDetail() {
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-xs text-slate-500">{label}</div>
+      <div className="text-xs text-slate-500 dark:text-slate-400">{label}</div>
       <div className="font-medium">{value}</div>
     </div>
   )

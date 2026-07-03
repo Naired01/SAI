@@ -28,22 +28,22 @@ export function Jobs() {
               <th></th>
             </tr>
           </thead>
-          <tbody>
-            {isLoading ? (
-              <tr><td colSpan={6} className="text-center text-slate-500">{t('common.loading')}</td></tr>
-            ) : !data?.items?.length ? (
-              <tr><td colSpan={6} className="text-center text-slate-500">{t('common.empty')}</td></tr>
-            ) : data.items.map((j) => (
-              <tr key={j.id} className="hover:bg-slate-50">
-                <td className="font-medium">{j.name}</td>
-                <td className="text-xs text-slate-500">{j.source}</td>
-                <td className="text-xs">{j.target_type}</td>
-                <td className="text-xs">{j.success_items}/{j.total_items}</td>
-                <td><StatusBadge kind="job" value={j.status} /></td>
-                <td><Link to={`/jobs/${j.id}`} className="text-brand-700 hover:underline text-xs">ver</Link></td>
-              </tr>
-            ))}
-          </tbody>
+              <tbody>
+                {isLoading ? (
+                  <tr><td colSpan={6} className="text-center text-slate-500 dark:text-slate-400">{t('common.loading')}</td></tr>
+                ) : !data?.items?.length ? (
+                  <tr><td colSpan={6} className="text-center text-slate-500 dark:text-slate-400">{t('common.empty')}</td></tr>
+                ) : data.items.map((j) => (
+                  <tr key={j.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                    <td className="font-medium">{j.name}</td>
+                    <td className="text-xs text-slate-500 dark:text-slate-400">{j.source}</td>
+                    <td className="text-xs">{j.target_type}</td>
+                    <td className="text-xs">{j.success_items}/{j.total_items}</td>
+                    <td><StatusBadge kind="job" value={j.status} /></td>
+                    <td><Link to={`/jobs/${j.id}`} className="text-brand-700 hover:underline text-xs dark:text-brand-300">ver</Link></td>
+                  </tr>
+                ))}
+              </tbody>
         </table>
       </div>
     </div>

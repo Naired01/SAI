@@ -52,12 +52,12 @@ export function Agents() {
       {/* Empty state cuando no hay agentes */}
       {!isLoading && data?.items?.length === 0 && (
         <div className="card p-8 text-center">
-          <div className="text-base font-medium text-slate-700 mb-1">
+          <div className="text-base font-medium text-slate-700 mb-1 dark:text-slate-200">
             Sin agentes conectados todavía
           </div>
-          <p className="text-sm text-slate-500 mb-4">
+          <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
             Para enrolar tu primer equipo: creá un enrollment token en{' '}
-            <Link to="/tokens" className="text-brand-700 hover:underline">Tokens</Link>,
+            <Link to="/tokens" className="text-brand-700 hover:underline dark:text-brand-300">Tokens</Link>,
             copiá la URL de descarga, y ejecutá el script de instalación en el equipo destino.
           </p>
           <button onClick={() => nav('/tokens')} className="btn-primary">
@@ -69,14 +69,16 @@ export function Agents() {
       <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4">
         {/* Sidebar: groups */}
         <aside className="card p-3 h-fit">
-          <div className="flex items-center gap-2 mb-2 text-sm font-medium text-slate-700">
+          <div className="flex items-center gap-2 mb-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <FolderTree size={16} /> {t('groups.title')}
           </div>
           <div className="space-y-1">
             <button
               onClick={() => { setParam('group_id', null); setParam('ungrouped', null) }}
               className={`w-full text-left text-sm px-2 py-1 rounded ${
-                !groupId && !ungrouped ? 'bg-brand-50 text-brand-700 font-medium' : 'hover:bg-slate-100'
+                !groupId && !ungrouped
+                  ? 'bg-brand-50 text-brand-700 font-medium dark:bg-brand-900/30 dark:text-brand-300'
+                  : 'hover:bg-slate-100 dark:hover:bg-slate-700'
               }`}
             >
               {t('agents.filter.all')}
@@ -84,7 +86,9 @@ export function Agents() {
             <button
               onClick={() => { setParam('group_id', null); setParam('ungrouped', 'true') }}
               className={`w-full text-left text-sm px-2 py-1 rounded ${
-                ungrouped ? 'bg-brand-50 text-brand-700 font-medium' : 'hover:bg-slate-100'
+                ungrouped
+                  ? 'bg-brand-50 text-brand-700 font-medium dark:bg-brand-900/30 dark:text-brand-300'
+                  : 'hover:bg-slate-100 dark:hover:bg-slate-700'
               }`}
             >
               {t('agents.ungrouped')} ({treeData?.ungrouped_count ?? 0})
@@ -101,7 +105,7 @@ export function Agents() {
         <section className="space-y-3">
           <div className="card p-3 flex flex-wrap items-center gap-2">
             <div className="relative flex-1 min-w-[200px]">
-              <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
+              <Search size={14} className="absolute left-3 top-2.5 text-slate-400 dark:text-slate-500" />
               <input
                 className="input pl-8"
                 placeholder={t('agents.search_placeholder')}
@@ -133,19 +137,19 @@ export function Agents() {
               </thead>
               <tbody>
                 {isLoading ? (
-                  <tr><td colSpan={5} className="text-center text-slate-500">{t('common.loading')}</td></tr>
+                  <tr><td colSpan={5} className="text-center text-slate-500 dark:text-slate-400">{t('common.loading')}</td></tr>
                 ) : !data?.items?.length ? (
-                  <tr><td colSpan={5} className="text-center text-slate-500">{t('common.empty')}</td></tr>
+                  <tr><td colSpan={5} className="text-center text-slate-500 dark:text-slate-400">{t('common.empty')}</td></tr>
                 ) : data.items.map((a) => (
-                  <tr key={a.id} className="hover:bg-slate-50">
+                  <tr key={a.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/40">
                     <td>
-                      <Link to={`/agents/${a.id}`} className="text-brand-700 hover:underline">
+                      <Link to={`/agents/${a.id}`} className="text-brand-700 hover:underline dark:text-brand-300">
                         {a.hostname}
                       </Link>
                     </td>
-                    <td className="text-slate-600">{a.os} {a.arch && <span className="text-slate-400">/ {a.arch}</span>}</td>
-                    <td className="text-slate-500 text-xs">{a.agent_version || '—'}</td>
-                    <td className="text-slate-500 text-xs">{a.last_seen_at || '—'}</td>
+                    <td className="text-slate-600 dark:text-slate-300">{a.os} {a.arch && <span className="text-slate-400 dark:text-slate-500">/ {a.arch}</span>}</td>
+                    <td className="text-slate-500 dark:text-slate-400 text-xs">{a.agent_version || '—'}</td>
+                    <td className="text-slate-500 dark:text-slate-400 text-xs">{a.last_seen_at || '—'}</td>
                     <td><StatusBadge kind="agent" value={a.online ? 'online' : 'offline'} /></td>
                   </tr>
                 ))}
@@ -172,10 +176,12 @@ function GroupTree({ nodes, selectedId, onSelect, depth = 0 }: {
             onClick={() => onSelect(n.id)}
             style={{ paddingLeft: `${depth * 12 + 8}px` }}
             className={`w-full text-left text-sm px-2 py-1 rounded ${
-              selectedId === n.id ? 'bg-brand-50 text-brand-700 font-medium' : 'hover:bg-slate-100'
+              selectedId === n.id
+                ? 'bg-brand-50 text-brand-700 font-medium dark:bg-brand-900/30 dark:text-brand-300'
+                : 'hover:bg-slate-100 dark:hover:bg-slate-700'
             }`}
           >
-            {n.name} <span className="text-slate-400 text-xs">({n.member_count})</span>
+            {n.name} <span className="text-slate-400 dark:text-slate-500 text-xs">({n.member_count})</span>
           </button>
           {n.children && n.children.length > 0 && (
             <GroupTree nodes={n.children} selectedId={selectedId} onSelect={onSelect} depth={depth + 1} />

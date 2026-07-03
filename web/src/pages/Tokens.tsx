@@ -51,31 +51,31 @@ export function Tokens() {
               <th></th>
             </tr>
           </thead>
-          <tbody>
-            {isLoading ? (
-              <tr><td colSpan={6} className="text-center text-slate-500">{t('common.loading')}</td></tr>
-            ) : !data?.items?.length ? (
-              <tr><td colSpan={6} className="text-center text-slate-500">{t('common.empty')}</td></tr>
-            ) : data.items.map((tok) => {
-              const status = tokenStatus(tok)
-              return (
-                <tr key={tok.id} className="hover:bg-slate-50">
-                  <td className="font-medium">{tok.label}</td>
-                  <td className="text-xs">{tok.uses}/{tok.max_uses}</td>
-                  <td className="text-xs">{tok.expires_at || '—'}</td>
-                  <td className="text-xs text-slate-500">{tok.created_at}</td>
-                  <td><StatusBadge kind="token" value={status} /></td>
-                  <td>
-                    {!tok.revoked_at && (
-                      <button onClick={() => { if (confirm(t('tokens.revoke.confirm'))) revokeMut.mutate(tok.id) }} className="text-xs text-red-700 hover:underline">
-                        <Trash2 size={12} />
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
+              <tbody>
+                {isLoading ? (
+                  <tr><td colSpan={6} className="text-center text-slate-500 dark:text-slate-400">{t('common.loading')}</td></tr>
+                ) : !data?.items?.length ? (
+                  <tr><td colSpan={6} className="text-center text-slate-500 dark:text-slate-400">{t('common.empty')}</td></tr>
+                ) : data.items.map((tok) => {
+                  const status = tokenStatus(tok)
+                  return (
+                    <tr key={tok.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                      <td className="font-medium">{tok.label}</td>
+                      <td className="text-xs">{tok.uses}/{tok.max_uses}</td>
+                      <td className="text-xs">{tok.expires_at || '—'}</td>
+                      <td className="text-xs text-slate-500 dark:text-slate-400">{tok.created_at}</td>
+                      <td><StatusBadge kind="token" value={status} /></td>
+                      <td>
+                        {!tok.revoked_at && (
+                          <button onClick={() => { if (confirm(t('tokens.revoke.confirm'))) revokeMut.mutate(tok.id) }} className="inline-flex items-center text-xs text-red-700 hover:underline dark:text-red-400" title={t('tokens.revoke')}>
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
         </table>
       </div>
 
@@ -87,9 +87,9 @@ export function Tokens() {
       )}
       {justCreated && (
         <div className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4" onClick={() => setJustCreated(null)}>
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-lg p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-lg font-semibold">{t('tokens.new')}</h2>
-            <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+            <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 dark:bg-amber-950/40 dark:border-amber-900 dark:text-amber-300">
               {t('tokens.plain_notice')}
             </div>
             <div>
@@ -106,7 +106,7 @@ export function Tokens() {
             </div>
             <div>
               <label className="label">{t('tokens.download_url')}</label>
-              <div className="font-mono text-xs break-all bg-slate-50 p-2 rounded border border-slate-200">
+              <div className="font-mono text-xs break-all bg-slate-50 p-2 rounded border border-slate-200 dark:bg-slate-900 dark:border-slate-700">
                 {window.location.origin + justCreated.download_url}
               </div>
             </div>
@@ -135,7 +135,7 @@ function CreateModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (b:
 
   return (
     <div className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 space-y-3">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-md p-5 space-y-3">
         <h2 className="text-lg font-semibold">{t('tokens.new')}</h2>
         <div>
           <label className="label">{t('tokens.label')}</label>

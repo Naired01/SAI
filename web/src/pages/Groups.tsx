@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { Plus, Trash2, FolderTree } from 'lucide-react'
+import { Plus, Trash2, FolderTree, Pencil } from 'lucide-react'
 import { get, post, patch, del, type Group } from '../lib/api'
 
 const COLORS = ['#327bff', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#0ea5e9', '#22c55e']
@@ -42,9 +42,9 @@ export function Groups() {
 
       <div className="card p-4">
         {isLoading ? (
-          <div className="text-sm text-slate-500">{t('common.loading')}</div>
+          <div className="text-sm text-slate-500 dark:text-slate-400">{t('common.loading')}</div>
         ) : !data?.tree?.length ? (
-          <div className="text-sm text-slate-500">{t('groups.empty')}</div>
+          <div className="text-sm text-slate-500 dark:text-slate-400">{t('groups.empty')}</div>
         ) : (
           <GroupList
             nodes={data.tree}
@@ -67,7 +67,7 @@ export function Groups() {
       )}
       {edit && (
         <GroupModal
-          title={t('common.save')}
+          title={t('groups.edit')}
           groups={data?.tree || []}
           initial={edit}
           onClose={() => setEdit(null)}
@@ -84,20 +84,32 @@ function GroupList({ nodes, depth, onEdit, onDelete }: {
   onEdit: (g: Group) => void
   onDelete: (g: Group) => void
 }) {
+  const { t } = useTranslation()
   return (
     <ul className="space-y-1">
       {nodes.map((g) => (
         <li key={g.id}>
           <div
             style={{ paddingLeft: `${depth * 16 + 8}px` }}
-            className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-slate-50"
+            className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-slate-50 dark:hover:bg-slate-800"
           >
             <FolderTree size={14} style={{ color: g.color || '#64748b' }} />
             <span className="font-medium">{g.name}</span>
-            <span className="text-xs text-slate-400">({g.member_count})</span>
+            <span className="text-xs text-slate-400 dark:text-slate-500">({g.member_count})</span>
             <div className="ml-auto flex gap-2">
-              <button onClick={() => onEdit(g)} className="text-xs text-brand-700 hover:underline">{t_label('common.save')}</button>
-              <button onClick={() => onDelete(g)} className="text-xs text-red-700 hover:underline">
+              <button
+                onClick={() => onEdit(g)}
+                title={t('common.edit')}
+                className="inline-flex items-center gap-1 text-xs text-brand-700 hover:underline dark:text-brand-300"
+              >
+                <Pencil size={12} />
+                <span>{t('common.edit')}</span>
+              </button>
+              <button
+                onClick={() => onDelete(g)}
+                title={t('common.delete')}
+                className="inline-flex items-center gap-1 text-xs text-red-700 hover:underline dark:text-red-400"
+              >
                 <Trash2 size={12} />
               </button>
             </div>
@@ -110,9 +122,6 @@ function GroupList({ nodes, depth, onEdit, onDelete }: {
     </ul>
   )
 }
-
-// helper minimal para evitar otro useTranslation en el closure
-function t_label(_k: string) { return '' }
 
 function GroupModal({ title, groups, initial, onClose, onSubmit }: {
   title: string
@@ -137,7 +146,7 @@ function GroupModal({ title, groups, initial, onClose, onSubmit }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 space-y-3">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-md p-5 space-y-3">
         <h2 className="text-lg font-semibold">{title}</h2>
         <div>
           <label className="label">{t('groups.name')}</label>
@@ -159,7 +168,7 @@ function GroupModal({ title, groups, initial, onClose, onSubmit }: {
                 type="button"
                 onClick={() => setColor(c)}
                 style={{ background: c }}
-                className={`w-7 h-7 rounded-full border-2 ${color === c ? 'border-slate-900' : 'border-transparent'}`}
+                className={`w-7 h-7 rounded-full border-2 ${color === c ? 'border-slate-900 dark:border-white' : 'border-transparent'}`}
               />
             ))}
           </div>

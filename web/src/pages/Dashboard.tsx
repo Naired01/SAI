@@ -32,12 +32,12 @@ export function Dashboard() {
         {/* Problem agents */}
         <section className="card p-4">
           <h2 className="font-semibold mb-3 flex items-center gap-2">
-            <AlertTriangle size={16} className="text-red-600" /> {t('dashboard.problem.title')}
+            <AlertTriangle size={16} className="text-red-600 dark:text-red-400" /> {t('dashboard.problem.title')}
           </h2>
           {isLoading ? (
-            <div className="text-sm text-slate-500">{t('common.loading')}</div>
+            <div className="text-sm text-slate-500 dark:text-slate-400">{t('common.loading')}</div>
           ) : !data?.problem_agents?.length ? (
-            <div className="text-sm text-slate-500">{t('dashboard.problem.empty')}</div>
+            <div className="text-sm text-slate-500 dark:text-slate-400">{t('dashboard.problem.empty')}</div>
           ) : (
             <table className="table">
               <thead>
@@ -49,14 +49,14 @@ export function Dashboard() {
               </thead>
               <tbody>
                 {data.problem_agents.map((a) => (
-                  <tr key={a.id}>
+                  <tr key={a.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/40">
                     <td>
-                      <Link to={`/agents/${a.id}`} className="text-brand-700 hover:underline">
+                      <Link to={`/agents/${a.id}`} className="text-brand-700 hover:underline dark:text-brand-300">
                         {a.hostname}
                       </Link>
                     </td>
-                    <td className="text-slate-600">{a.os}</td>
-                    <td className="text-slate-500 text-xs">{a.last_seen_at || '—'}</td>
+                    <td className="text-slate-600 dark:text-slate-300">{a.os}</td>
+                    <td className="text-slate-500 dark:text-slate-400 text-xs">{a.last_seen_at || '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -67,12 +67,12 @@ export function Dashboard() {
         {/* Quick actions */}
         <section className="card p-4">
           <h2 className="font-semibold mb-3 flex items-center gap-2">
-            <Play size={16} className="text-brand-700" /> {t('dashboard.quick.title')}
+            <Play size={16} className="text-brand-700 dark:text-brand-400" /> {t('dashboard.quick.title')}
           </h2>
           {isLoading ? (
-            <div className="text-sm text-slate-500">{t('common.loading')}</div>
+            <div className="text-sm text-slate-500 dark:text-slate-400">{t('common.loading')}</div>
           ) : !data?.quick_actions?.length ? (
-            <div className="text-sm text-slate-500">{t('dashboard.quick.empty')}</div>
+            <div className="text-sm text-slate-500 dark:text-slate-400">{t('dashboard.quick.empty')}</div>
           ) : (
             <div className="flex flex-wrap gap-2">
               {data.quick_actions.map((tpl) => (
@@ -96,9 +96,9 @@ export function Dashboard() {
           <ListChecks size={16} /> {t('dashboard.recent_jobs')}
         </h2>
         {isLoading ? (
-          <div className="text-sm text-slate-500">{t('common.loading')}</div>
+          <div className="text-sm text-slate-500 dark:text-slate-400">{t('common.loading')}</div>
         ) : !data?.recent_jobs?.length ? (
-          <div className="text-sm text-slate-500">{t('dashboard.recent_jobs.empty')}</div>
+          <div className="text-sm text-slate-500 dark:text-slate-400">{t('dashboard.recent_jobs.empty')}</div>
         ) : (
           <table className="table">
             <thead>
@@ -112,15 +112,15 @@ export function Dashboard() {
             </thead>
             <tbody>
               {data.recent_jobs.map((j) => (
-                <tr key={j.id}>
+                <tr key={j.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/40">
                   <td>{j.name}</td>
                   <td>{j.target_type}</td>
-                  <td className="text-xs text-slate-600">
+                  <td className="text-xs text-slate-600 dark:text-slate-300">
                     {j.success_items}/{j.total_items}
                   </td>
                   <td><StatusBadge kind="job" value={j.status} /></td>
                   <td>
-                    <Link to={`/jobs/${j.id}`} className="text-brand-700 hover:underline text-xs">ver</Link>
+                    <Link to={`/jobs/${j.id}`} className="text-brand-700 hover:underline text-xs dark:text-brand-300">ver</Link>
                   </td>
                 </tr>
               ))}
@@ -140,17 +140,17 @@ function Kpi({ icon, label, value, tone, loading }: {
   loading?: boolean
 }) {
   const tones: Record<string, string> = {
-    green: 'text-green-700 bg-green-50',
-    gray: 'text-slate-700 bg-slate-100',
-    red: 'text-red-700 bg-red-50',
-    blue: 'text-brand-700 bg-brand-50',
-    purple: 'text-purple-700 bg-purple-50',
+    green: 'text-green-700 bg-green-50 dark:text-green-300 dark:bg-green-900/30',
+    gray: 'text-slate-700 bg-slate-100 dark:text-slate-300 dark:bg-slate-700/50',
+    red: 'text-red-700 bg-red-50 dark:text-red-300 dark:bg-red-900/30',
+    blue: 'text-brand-700 bg-brand-50 dark:text-brand-300 dark:bg-brand-900/30',
+    purple: 'text-purple-700 bg-purple-50 dark:text-purple-300 dark:bg-purple-900/30',
   }
   return (
     <div className="card p-4 flex items-center gap-3">
       <div className={`w-10 h-10 rounded-lg grid place-items-center ${tones[tone]}`}>{icon}</div>
       <div>
-        <div className="text-xs text-slate-500">{label}</div>
+        <div className="text-xs text-slate-500 dark:text-slate-400">{label}</div>
         <div className="text-2xl font-semibold tabular-nums">{loading ? '…' : (value ?? 0)}</div>
       </div>
     </div>

@@ -80,20 +80,20 @@ export function Audit() {
           </thead>
           <tbody>
             {isLoading ? (
-              <tr><td colSpan={6} className="text-center text-slate-500">{t('common.loading')}</td></tr>
+              <tr><td colSpan={6} className="text-center text-slate-500 dark:text-slate-400">{t('common.loading')}</td></tr>
             ) : !data?.items?.length ? (
-              <tr><td colSpan={6} className="text-center text-slate-500">{t('audit.empty')}</td></tr>
+              <tr><td colSpan={6} className="text-center text-slate-500 dark:text-slate-400">{t('audit.empty')}</td></tr>
             ) : data.items.map((e) => (
-              <tr key={e.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => setOpen(e)}>
-                <td className="text-xs text-slate-500">{e.occurred_at}</td>
-                <td><span className="badge bg-slate-100 text-slate-700 mr-1">{e.actor_type}</span> {e.actor_label}</td>
+              <tr key={e.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/40 cursor-pointer" onClick={() => setOpen(e)}>
+                <td className="text-xs text-slate-500 dark:text-slate-400">{e.occurred_at}</td>
+                <td><span className="badge bg-slate-100 text-slate-700 mr-1 dark:bg-slate-700 dark:text-slate-200">{e.actor_type}</span> {e.actor_label}</td>
                 <td><code className="text-xs">{e.action}</code></td>
                 <td className="text-xs">
-                  {e.target_type && <span className="badge bg-slate-100 text-slate-700 mr-1">{e.target_type}</span>}
+                  {e.target_type && <span className="badge bg-slate-100 text-slate-700 mr-1 dark:bg-slate-700 dark:text-slate-200">{e.target_type}</span>}
                   {e.target_label || '—'}
                 </td>
-                <td className="text-xs text-slate-500">{e.ip || '—'}</td>
-                <td><span className="text-xs text-brand-700">ver</span></td>
+                <td className="text-xs text-slate-500 dark:text-slate-400">{e.ip || '—'}</td>
+                <td><span className="text-xs text-brand-700 dark:text-brand-300">ver</span></td>
               </tr>
             ))}
           </tbody>
@@ -102,9 +102,9 @@ export function Audit() {
 
       {open && (
         <div className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4" onClick={() => setOpen(null)}>
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-2xl p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-lg font-semibold">{t('audit.detail')}</h2>
-            <pre className="text-xs whitespace-pre-wrap bg-slate-50 p-3 rounded border border-slate-200">
+            <pre className="text-xs whitespace-pre-wrap bg-slate-50 p-3 rounded border border-slate-200 dark:bg-slate-900 dark:border-slate-700">
               {JSON.stringify(open, null, 2)}
             </pre>
             <div className="flex justify-end">

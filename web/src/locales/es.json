@@ -23,6 +23,8 @@
   "common.problem": "Problemas",
   "common.error": "Error",
   "common.success": "Éxito",
+  "common.edit": "Editar",
+  "common.confirm_delete": "¿Eliminar?",
 
   "nav.dashboard": "Dashboard",
   "nav.agents": "Agentes",
@@ -85,6 +87,7 @@
 
   "groups.title": "Grupos",
   "groups.new": "Nuevo grupo",
+  "groups.edit": "Editar grupo",
   "groups.name": "Nombre",
   "groups.parent": "Padre",
   "groups.color": "Color",
@@ -96,6 +99,7 @@
 
   "templates.title": "Plantillas de comandos",
   "templates.new": "Nueva plantilla",
+  "templates.edit": "Editar plantilla",
   "templates.name": "Nombre",
   "templates.category": "Categoría",
   "templates.command": "Comando",
@@ -171,5 +175,8 @@
   "tokens.status.revoked": "Revocado",
 
   "theme.toggle": "Cambiar tema",
+  "theme.system": "Sistema",
+  "theme.light": "Claro",
+  "theme.dark": "Oscuro",
   "lang.toggle": "Cambiar idioma"
 }

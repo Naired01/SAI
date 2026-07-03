@@ -23,6 +23,8 @@
   "common.problem": "Issues",
   "common.error": "Error",
   "common.success": "Success",
+  "common.edit": "Edit",
+  "common.confirm_delete": "Delete?",
 
   "nav.dashboard": "Dashboard",
   "nav.agents": "Agents",
@@ -85,6 +87,7 @@
 
   "groups.title": "Groups",
   "groups.new": "New group",
+  "groups.edit": "Edit group",
   "groups.name": "Name",
   "groups.parent": "Parent",
   "groups.color": "Color",
@@ -96,6 +99,7 @@
 
   "templates.title": "Command templates",
   "templates.new": "New template",
+  "templates.edit": "Edit template",
   "templates.name": "Name",
   "templates.category": "Category",
   "templates.command": "Command",
@@ -171,5 +175,8 @@
   "tokens.status.revoked": "Revoked",
 
   "theme.toggle": "Toggle theme",
+  "theme.system": "System",
+  "theme.light": "Light",
+  "theme.dark": "Dark",
   "lang.toggle": "Toggle language"
 }

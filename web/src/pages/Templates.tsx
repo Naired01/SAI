@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
-import { Plus, Trash2, Play, Lock } from 'lucide-react'
+import { Plus, Trash2, Play, Lock, Pencil } from 'lucide-react'
 import { get, post, patch, del, type Template, type Group, type Agent } from '../lib/api'
 
 export function Templates() {
@@ -56,14 +56,14 @@ export function Templates() {
       </div>
 
       {isLoading ? (
-        <div className="text-slate-500 text-sm">{t('common.loading')}</div>
+        <div className="text-slate-500 dark:text-slate-400 text-sm">{t('common.loading')}</div>
       ) : !data?.items?.length ? (
-        <div className="text-slate-500 text-sm">{t('common.empty')}</div>
+        <div className="text-slate-500 dark:text-slate-400 text-sm">{t('common.empty')}</div>
       ) : (
         <div className="space-y-4">
           {Object.entries(byCategory).map(([cat, items]) => (
             <section key={cat} className="card p-4">
-              <h2 className="text-sm font-semibold text-slate-700 mb-2 uppercase tracking-wide">{cat}</h2>
+              <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wide">{cat}</h2>
               <table className="table">
                 <thead>
                   <tr>
@@ -76,10 +76,10 @@ export function Templates() {
                 </thead>
                 <tbody>
                   {items.map((tpl) => (
-                    <tr key={tpl.id} className="hover:bg-slate-50">
+                    <tr key={tpl.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/60">
                       <td>
                         <div className="font-medium">{tpl.name}</div>
-                        {tpl.description && <div className="text-xs text-slate-500">{tpl.description}</div>}
+                        {tpl.description && <div className="text-xs text-slate-500 dark:text-slate-400">{tpl.description}</div>}
                       </td>
                       <td className="font-mono text-xs">
                         {tpl.command} {tpl.args?.length ? ' ' + tpl.args.join(' ') : ''}
@@ -91,14 +91,23 @@ export function Templates() {
                         </button>
                       </td>
                       <td className="text-right whitespace-nowrap">
-                        {tpl.is_builtin && <Lock size={12} className="inline mr-2 text-slate-400" />}
+                        {tpl.is_builtin && <span title={t('templates.builtin')}><Lock size={12} className="inline mr-2 text-slate-400 dark:text-slate-500" /></span>}
                         {!tpl.is_builtin && (
-                          <button onClick={() => setEditing(tpl)} className="text-xs text-brand-700 hover:underline mr-2">
-                            editar
+                          <button
+                            onClick={() => setEditing(tpl)}
+                            title={t('common.edit')}
+                            className="inline-flex items-center gap-1 text-xs text-brand-700 hover:underline mr-2 dark:text-brand-300"
+                          >
+                            <Pencil size={12} />
+                            <span>{t('common.edit')}</span>
                           </button>
                         )}
                         {!tpl.is_builtin && (
-                          <button onClick={() => { if (confirm('¿Eliminar?')) delMut.mutate(tpl.id) }} className="text-xs text-red-700 hover:underline">
+                          <button
+                            onClick={() => { if (confirm(t('common.confirm_delete'))) delMut.mutate(tpl.id) }}
+                            title={t('common.delete')}
+                            className="inline-flex items-center text-xs text-red-700 hover:underline dark:text-red-400"
+                          >
                             <Trash2 size={12} />
                           </button>
                         )}
@@ -114,7 +123,7 @@ export function Templates() {
 
       {(creating || editing) && (
         <TemplateModal
-          title={creating ? t('templates.new') : t('common.save')}
+          title={creating ? t('templates.new') : t('templates.edit')}
           initial={editing || undefined}
           onClose={() => { setCreating(false); setEditing(null) }}
           onSubmit={(b) => {
@@ -158,7 +167,7 @@ function TemplateModal({ title, initial, onClose, onSubmit }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-5 space-y-3 max-h-[90vh] overflow-y-auto">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-lg p-5 space-y-3 max-h-[90vh] overflow-y-auto">
         <h2 className="text-lg font-semibold">{title}</h2>
         <div className="grid grid-cols-2 gap-3">
           <div className="col-span-2"><label className="label">{t('templates.name')}</label>
@@ -213,9 +222,9 @@ function RunModal({ template, groups, onClose, onSubmit }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 space-y-3">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-md p-5 space-y-3">
         <h2 className="text-lg font-semibold">{t('templates.run_on.title')}</h2>
-        <div className="text-sm text-slate-600">{template.name}</div>
+        <div className="text-sm text-slate-600 dark:text-slate-300">{template.name}</div>
         <div>
           <label className="label">{t('templates.run_on.name')}</label>
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
@@ -236,7 +245,7 @@ function RunModal({ template, groups, onClose, onSubmit }: {
             </select>
           </div>
         )}
-        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 dark:bg-amber-950/40 dark:border-amber-900 dark:text-amber-300">
           {t('jobs.phase_notice')}
         </div>
         <div className="flex justify-end gap-2 pt-2">
