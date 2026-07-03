@@ -157,9 +157,20 @@ func (s *Server) handleAgentDownload(w http.ResponseWriter, r *http.Request) {
 	arch := r.URL.Query().Get("arch")
 	asset, err := builder.Asset(osName, arch)
 	if err != nil {
+		// Distinguimos "params faltantes/inválidos" (400) de "binario no
+		// disponible en el server" (404) para que el cliente sepa qué
+		// arreglar.
+		msg := err.Error()
+		if strings.Contains(msg, "required") || strings.HasPrefix(msg, "unsupported") {
+			httpx.RenderJSON(w, http.StatusBadRequest, httpx.Error{
+				Code:    "invalid_params",
+				Message: msg,
+			})
+			return
+		}
 		httpx.RenderJSON(w, http.StatusNotFound, httpx.Error{
 			Code:    "binary_not_available",
-			Message: err.Error(),
+			Message: msg,
 		})
 		return
 	}

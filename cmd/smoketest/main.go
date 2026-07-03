@@ -147,16 +147,33 @@ func main() {
 	fmt.Println("[7] POST /api/v1/tokens (con CSRF)")
 	r = withCSRF(client, "POST", base+"/api/v1/tokens", csrf, map[string]any{
 		"label":     "smoke-test-bundle",
-		"max_uses":  5, // suficiente para descargar 3 bundles + dejar margen
+		"max_uses":  8, // 6 downloads + 1 para el 400 + margen
 		"ttl_hours": 24,
 	})
 	check("crear token", r.status, 201, r.body)
 	var tokResp struct {
-		Plain string `json:"plain"`
+		Plain        string `json:"plain"`
+		DownloadURLs []struct {
+			OS   string `json:"os"`
+			Arch string `json:"arch"`
+			URL  string `json:"url"`
+		} `json:"download_urls"`
 	}
 	_ = json.Unmarshal(r.body, &tokResp)
 	enrollToken := tokResp.Plain
+	urls := map[string]string{} // key "os/arch" -> url
+	for _, p := range tokResp.DownloadURLs {
+		urls[p.OS+"/"+p.Arch] = p.URL
+	}
 	fmt.Printf("         enroll token (24 chars): %s...\n", enrollToken[:min(24, len(enrollToken))])
+	fmt.Printf("         download_urls count: %d (esperado: 6)\n", len(tokResp.DownloadURLs))
+	if len(tokResp.DownloadURLs) == 6 {
+		fmt.Println("         [PASS] download_urls tiene 6 plataformas")
+		pass++
+	} else {
+		fmt.Printf("         [FAIL] download_urls tiene %d, esperado 6\n", len(tokResp.DownloadURLs))
+		fail++
+	}
 
 	// 8. Listar tokens
 	fmt.Println("[8] GET /api/v1/tokens")
@@ -240,6 +257,33 @@ func main() {
 	fmt.Println("[18] /api/v1/agents/download con token inválido (debe ser 403)")
 	r = downloadBundleRaw(base+"/api/v1/agents/download?token=invalid-token-xxx&os=windows&arch=amd64")
 	check("download token inválido", r.status, 403, r.body)
+
+	// 19. Descarga sin ?os= o sin ?arch= debe dar 400 (no fallback al server's OS)
+	fmt.Println("[19-20] Download sin ?os= o sin ?arch= debe ser 400")
+	r = downloadBundleRaw(base + "/api/v1/agents/download?token=" + enrollToken)
+	check("download sin os/arch", r.status, 400, r.body)
+	r = downloadBundleRaw(base + "/api/v1/agents/download?token=" + enrollToken + "&os=windows")
+	check("download sin arch", r.status, 400, r.body)
+
+	// 21-23. Descarga de los 3 targets restantes (arm64) — valida que el array
+	// de download_urls funciona para todas las plataformas, no solo amd64.
+	fmt.Println("[21-23] Descarga de bundles arm64 (los 3 OS)")
+	for _, tgt := range []struct{ os, arch string }{
+		{"windows", "arm64"},
+		{"linux", "arm64"},
+		{"darwin", "arm64"},
+	} {
+		r = downloadBundle(base, enrollToken, tgt.os, tgt.arch)
+		ok := r.status == 200 && len(r.body) > 1024 && strings.Contains(r.ct, "zip")
+		if ok {
+			fmt.Printf("  [PASS] bundle %s/%s -> %d bytes\n", tgt.os, tgt.arch, len(r.body))
+			pass++
+		} else {
+			fmt.Printf("  [FAIL] bundle %s/%s -> status=%d size=%d ct=%s\n",
+				tgt.os, tgt.arch, r.status, len(r.body), r.ct)
+			fail++
+		}
+	}
 
 	// Resumen
 	fmt.Println()

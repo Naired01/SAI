@@ -154,6 +154,18 @@ export type Token = {
   has_uses_left: boolean
 }
 
+export type PlatformUrl = {
+  os: 'windows' | 'linux' | 'darwin'
+  arch: 'amd64' | 'arm64'
+  url: string
+}
+
+export type TokenCreateResponse = {
+  token: Token
+  plain: string
+  download_urls: PlatformUrl[]
+}
+
 export type AuditEvent = {
   id: number
   occurred_at: string

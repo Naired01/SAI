@@ -54,10 +54,36 @@ func (s *Server) handleTokensCreate(w http.ResponseWriter, r *http.Request) {
 		Request: r,
 		Metadata: map[string]any{"max_uses": t.MaxUses, "ttl_seconds": int64(ttl.Seconds())},
 	})
+
+	// Generar una URL de descarga por cada plataforma soportada.
+	// El admin debe elegir explícitamente; el endpoint de descarga
+	// rechaza requests sin ?os= y ?arch= (ver internal/bundles/bundles.go).
+	type platformURL struct {
+		OS   string `json:"os"`
+		Arch string `json:"arch"`
+		URL  string `json:"url"`
+	}
+	targets := []struct{ os, arch string }{
+		{"windows", "amd64"},
+		{"windows", "arm64"},
+		{"linux", "amd64"},
+		{"linux", "arm64"},
+		{"darwin", "amd64"},
+		{"darwin", "arm64"},
+	}
+	urls := make([]platformURL, 0, len(targets))
+	for _, t := range targets {
+		urls = append(urls, platformURL{
+			OS:   t.os,
+			Arch: t.arch,
+			URL:  "/api/v1/agents/download?token=" + plain + "&os=" + t.os + "&arch=" + t.arch,
+		})
+	}
+
 	httpx.RenderJSON(w, http.StatusCreated, map[string]any{
 		"token":        t,
 		"plain":        plain,
-		"download_url": "/api/v1/agents/download?token=" + plain,
+		"download_urls": urls,
 	})
 }
 

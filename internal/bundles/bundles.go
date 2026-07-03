@@ -16,7 +16,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -45,20 +44,21 @@ func New(bundleDir string) *Builder {
 }
 
 // Asset devuelve el asset para el (os, arch) solicitado.
+// Si os o arch están vacíos devuelve error: el caller debe pasar
+// ambos explícitamente (no se hace fallback a runtime.GOOS para
+// evitar servir el binario incorrecto cuando el server corre en
+// Docker Linux pero el admin quiere un bundle para Windows/macOS).
 func (b *Builder) Asset(osName, arch string) (*Asset, error) {
 	osName = normalizeOS(osName)
 	arch = normalizeArch(arch)
-	if osName == "" {
-		osName = runtimeOS()
-	}
-	if arch == "" {
-		arch = runtimeArch()
+	if osName == "" || arch == "" {
+		return nil, fmt.Errorf("os and arch query params are required (e.g. ?os=windows&arch=amd64)")
 	}
 	if !validOS(osName) {
-		return nil, fmt.Errorf("unsupported OS: %s", osName)
+		return nil, fmt.Errorf("unsupported OS: %s (supported: windows, linux, darwin)", osName)
 	}
 	if !validArch(arch) {
-		return nil, fmt.Errorf("unsupported arch: %s", arch)
+		return nil, fmt.Errorf("unsupported arch: %s (supported: amd64, arm64)", arch)
 	}
 
 	binName := fmt.Sprintf("sai-agent-%s-%s", osName, arch)
@@ -67,7 +67,7 @@ func (b *Builder) Asset(osName, arch string) (*Asset, error) {
 	}
 	full := filepath.Join(b.BundleDir, binName)
 	if _, err := os.Stat(full); err != nil {
-		return nil, fmt.Errorf("agent binary not found: %s (run 'make dist' or download from GitHub Releases)", full)
+		return nil, fmt.Errorf("agent binary not found: %s (rebuild Docker image or run scripts/build-release.sh)", full)
 	}
 	return &Asset{
 		BinaryPath: full,
@@ -360,19 +360,3 @@ func normalizeArch(s string) string {
 
 func validOS(s string) bool { return s == "windows" || s == "linux" || s == "darwin" }
 func validArch(s string) bool { return s == "amd64" || s == "arm64" }
-
-func runtimeOS() string {
-	switch runtime.GOOS {
-	case "windows", "linux", "darwin":
-		return runtime.GOOS
-	}
-	return "linux"
-}
-
-func runtimeArch() string {
-	switch runtime.GOARCH {
-	case "amd64", "arm64":
-		return runtime.GOARCH
-	}
-	return "amd64"
-}

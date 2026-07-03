@@ -1,9 +1,33 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { Plus, Copy, Check, Trash2 } from 'lucide-react'
-import { get, post, del, type Token } from '../lib/api'
+import { Plus, Copy, Check, Trash2, Download, Monitor, Apple, Terminal } from 'lucide-react'
+import clsx from 'clsx'
+import { get, post, del, type Token, type PlatformUrl } from '../lib/api'
 import { StatusBadge } from '../components/StatusBadge'
+
+// detectClientPlatform intenta adivinar el SO + arch del navegador que
+// corre el panel, para resaltar el download más probable. Es solo UX;
+// el admin puede elegir cualquier plataforma igualmente.
+function detectClientPlatform(): { os: 'windows' | 'linux' | 'darwin'; arch: 'amd64' | 'arm64' } {
+  const ua = (typeof navigator !== 'undefined' ? navigator.userAgent : '').toLowerCase()
+  const uaData = (typeof navigator !== 'undefined' ? (navigator as any).userAgentData : null)
+  const platform = (uaData?.platform || (typeof navigator !== 'undefined' ? (navigator as any).platform : '') || '').toLowerCase()
+
+  let os: 'windows' | 'linux' | 'darwin' = 'linux'
+  if (ua.includes('win') || platform.includes('win')) os = 'windows'
+  else if (ua.includes('mac') || ua.includes('darwin') || platform.includes('mac')) os = 'darwin'
+  else os = 'linux'
+
+  // arm64 solo lo exponen navegadores modernos vía userAgentData
+  let arch: 'amd64' | 'arm64' = 'amd64'
+  if (uaData?.platform === 'macOS' && uaData?.architecture) {
+    if (uaData.architecture === 'arm') arch = 'arm64'
+  } else if (platform.includes('arm') || platform.includes('aarch64')) {
+    arch = 'arm64'
+  }
+  return { os, arch }
+}
 
 export function Tokens() {
   const { t } = useTranslation()
@@ -14,11 +38,12 @@ export function Tokens() {
   })
 
   const [creating, setCreating] = useState(false)
-  const [justCreated, setJustCreated] = useState<{ plain: string; download_url: string; token: Token } | null>(null)
+  const [justCreated, setJustCreated] = useState<{ plain: string; download_urls: PlatformUrl[]; token: Token } | null>(null)
   const [copied, setCopied] = useState(false)
+  const clientPlat = detectClientPlatform()
 
   const createMut = useMutation({
-    mutationFn: (b: any) => post<{ token: Token; plain: string; download_url: string }>('/api/v1/tokens', b),
+    mutationFn: (b: any) => post<{ token: Token; plain: string; download_urls: PlatformUrl[] }>('/api/v1/tokens', b),
     onSuccess: (r) => {
       setJustCreated(r)
       setCreating(false)
@@ -87,11 +112,13 @@ export function Tokens() {
       )}
       {justCreated && (
         <div className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4" onClick={() => setJustCreated(null)}>
-          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-lg p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-2xl p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-lg font-semibold">{t('tokens.new')}</h2>
             <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 dark:bg-amber-950/40 dark:border-amber-900 dark:text-amber-300">
               {t('tokens.plain_notice')}
             </div>
+
+            {/* Plain token con botón copiar */}
             <div>
               <label className="label">Plain token</label>
               <div className="flex gap-2">
@@ -104,12 +131,57 @@ export function Tokens() {
                 </button>
               </div>
             </div>
+
+            {/* Grid de descarga por plataforma */}
             <div>
-              <label className="label">{t('tokens.download_url')}</label>
-              <div className="font-mono text-xs break-all bg-slate-50 p-2 rounded border border-slate-200 dark:bg-slate-900 dark:border-slate-700">
-                {window.location.origin + justCreated.download_url}
+              <label className="label">{t('tokens.download_for_platform')}</label>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {(['windows', 'linux', 'darwin'] as const).map((os) => (
+                  <div key={os} className="card p-3">
+                    <div className="flex items-center gap-2 text-sm font-semibold mb-2">
+                      {os === 'windows' && <Monitor size={16} className="text-blue-600" />}
+                      {os === 'linux' && <Terminal size={16} className="text-orange-600" />}
+                      {os === 'darwin' && <Apple size={16} className="text-slate-600" />}
+                      {t(`tokens.platform.${os}`)}
+                    </div>
+                    <div className="space-y-1.5">
+                      {(['amd64', 'arm64'] as const).map((arch) => {
+                        const link = justCreated.download_urls.find((p) => p.os === os && p.arch === arch)
+                        if (!link) return null
+                        const isClient = os === clientPlat.os && arch === clientPlat.arch
+                        return (
+                          <a
+                            key={arch}
+                            href={window.location.origin + link.url}
+                            target="_blank"
+                            rel="noopener"
+                            download
+                            className={clsx(
+                              'flex items-center justify-between gap-2 px-2.5 py-1.5 rounded text-xs border transition',
+                              isClient
+                                ? 'bg-brand-50 border-brand-300 text-brand-800 hover:bg-brand-100'
+                                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                            )}
+                          >
+                            <span className="flex items-center gap-1.5">
+                              <Download size={12} /> {arch}
+                              {isClient && (
+                                <span className="badge bg-brand-600 text-white text-[10px] px-1.5 py-0">
+                                  {t('tokens.platform.detected')}
+                                </span>
+                              )}
+                            </span>
+                            <span className="font-mono text-[10px] text-slate-400">sai-agent-{os}-{arch}{os === 'windows' ? '.exe' : ''}</span>
+                          </a>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
+              <p className="text-xs text-slate-500 mt-2">{t('tokens.platform.help')}</p>
             </div>
+
             <div className="flex justify-end">
               <button className="btn-secondary" onClick={() => setJustCreated(null)}>{t('common.close')}</button>
             </div>

@@ -616,4 +616,5 @@ Multi-stage: `node:22-alpine` (panel) → `golang:1.25-alpine` (server + agente)
 ## 15. Changelog del plan
 
 - **v1.1** (este): grupos jerárquicos, plantillas de comando, jobs, auditoría y dashboard suben a Fase 1; páginas de Agentes con tabs; seed de plantillas builtin.
+  - **v1.1.1**: el endpoint `POST /api/v1/tokens` ahora devuelve `download_urls` (array de 6 URLs por plataforma) en lugar de un único `download_url`. El handler `GET /api/v1/agents/download` rechaza con `400 invalid_params` si faltan `?os=` o `?arch=` (ya no hace fallback a `runtime.GOOS` del server, que hacía que Docker Linux siempre sirviera binarios Linux sin importar el OS destino). El panel muestra grid 3×2 con auto-detección del cliente y badge "Detectado".
 - **v1**: versión inicial con auth, tokens, agentes, WS hub, bundle y panel básico.

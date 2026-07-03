@@ -137,9 +137,9 @@ Los **agentes** son binarios livianos (~6 MB) que corren como servicio nativo en
 ### Flujo end-to-end
 
 ```
-[Panel] Admin → Tokens → [+] Crear token → recibe download_url
+[Panel] Admin → Tokens → [+] Crear token → recibe 6 URLs (Windows/Linux/macOS × amd64/arm64)
    │
-   ▼
+   ▼ el admin elige la URL de la plataforma correcta
 [Equipo destino] Descarga ZIP → descomprime → ejecuta install.ps1 / install.sh
    │
    ▼ (al iniciar)
@@ -157,10 +157,10 @@ Los **agentes** son binarios livianos (~6 MB) que corren como servicio nativo en
    - `Label`: nombre descriptivo (ej. "Laptop Juan Pérez")
    - `Max uses`: 1 para un solo equipo, N si vas a usar el mismo link en varios
    - `TTL hours`: ventana de tiempo para que el agente se conecte (ej. 24)
-4. Click **Crear token** → aparece un diálogo con el token en plaintext y la URL de descarga. **Copiá el token ya** — no se vuelve a mostrar.
-5. Descargá el ZIP en el equipo destino:
-   - Click directo en la URL → el browser descarga `sai-agent-{os}-{arch}.zip`
-   - O transferilo por USB / SCP / compartido de archivos / etc.
+4. Click **Crear token** → aparece un diálogo con:
+   - **Plain token** (con botón copiar) — **copialo ya**, no se vuelve a mostrar.
+   - **Grid de 6 URLs de descarga**, una por cada combinación OS × arch soportada (Windows/Linux/macOS × amd64/arm64). La plataforma detectada del navegador se resalta con badge "Detectado" pero podés elegir cualquiera.
+5. Click en el botón de la plataforma del equipo destino → el browser descarga `sai-agent-{os}-{arch}.zip`. Si necesitás instalar en otro OS, copiá el link correspondiente y mandáselo al usuario.
 6. **En el equipo destino**, ejecutá:
 
 **Windows** (PowerShell como Administrador):
@@ -221,7 +221,8 @@ go run ./cmd/agent-installer \
 
 | Error | Causa | Solución |
 |---|---|---|
-| `binary_not_available` (404) | `dist/` no tiene el binario | Reconstruí la imagen Docker (los binarios van embebidos) o corré `./scripts/build-release.sh` |
+| `binary_not_available` (404) | `dist/` no tiene el binario para esa plataforma | Reconstruí la imagen Docker (los binarios van embebidos) o corré `./scripts/build-release.sh` |
+| `invalid_params` (400) | Falta `?os=` o `?arch=` en la URL | Ambos son obligatorios. Usá los links que genera el panel |
 | `invalid_token` (403) | Token expirado / agotado / revocado | Creá uno nuevo en el panel |
 | `missing token` (400) | Falta el query param `token=` | El link del panel ya lo incluye; si lo armás a mano, agregá `?token=XXX` |
 
