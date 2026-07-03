@@ -1,11 +1,20 @@
-name: release-beta
+name: release
 
 # Publica binarios + imagen Docker en GitHub Releases y ghcr.io cuando
-# se pushea un tag con sufijo "-beta" (ej: v0.1.0-beta1).
+# se pushea un tag que comienza con "v" (ej: v0.1.0).
+#
+# También se puede disparar manualmente desde la pestaña Actions con el
+# input "tag" para re-emitir un release sin tener que borrar+recrear tags.
 on:
   push:
     tags:
-      - 'v*+beta*'
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag a publicar (ej: v0.1.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -46,8 +55,13 @@ jobs:
       - name: Determine version
         id: ver
         run: |
-          echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
-          echo "short=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "short=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+            echo "short=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Build sai-server (linux/amd64 + linux/arm64)
         run: |
@@ -97,7 +111,7 @@ jobs:
           tags: |
             ghcr.io/naired01/sai:${{ steps.ver.outputs.version }}
             ghcr.io/naired01/sai:${{ steps.ver.outputs.short }}
-            ghcr.io/naired01/sai:latest-beta
+            ghcr.io/naired01/sai:latest
           build-args: |
             VERSION=${{ steps.ver.outputs.version }}
             COMMIT=${{ github.sha }}
@@ -168,7 +182,7 @@ jobs:
             echo ""
             echo "### Notas"
             echo ""
-            echo "Esta es una release **BETA**. La ejecución real de comandos se habilita en Fase 3; los jobs quedan en estado \`pending\` hasta entonces."
+            echo "La ejecución real de comandos se habilita en Fase 3; los jobs quedan en estado \`pending\` hasta entonces."
           } > release_notes.md
 
       - name: Create GitHub Release
@@ -176,7 +190,7 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           body_path: release_notes.md
-          prerelease: true
+          prerelease: false
           files: |
             dist/sai-server-linux-amd64
             dist/sai-server-linux-arm64
@@ -230,7 +244,7 @@ jobs:
           SERVER_PID=$!
           sleep 5
           echo "--- /api/v1/health ---"
-          curl -sf http://localhost:8080/api/v1/health || (cat /tmp/sai.log; exit 1)
+          curl -sf http://localhost:8080/api/v1/health
           echo
           echo "--- /api/v1/version ---"
           curl -sf http://localhost:8080/api/v1/version

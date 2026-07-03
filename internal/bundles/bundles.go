@@ -4,7 +4,7 @@
 //
 // Los binarios base se leen de cfg.BundleDir (variable SAI_BUNDLE_DIR).
 // El CI los coloca ahí al deployar la imagen Docker o al extraer el
-// artefacto de GitHub Releases BETA.
+// artefacto de GitHub Releases.
 package bundles
 
 import (

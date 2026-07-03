@@ -54,11 +54,11 @@ El equipo de TI necesita visibilidad y control sobre las máquinas que administr
 | 3 | DB | **PostgreSQL 16** con `pgx` directo + migraciones embebidas (`embed.FS`) | Tipos ricos (UUID, JSONB, INET), particiones |
 | 4 | Auth agentes | **JWT por-agente** firmado por server, secret único en `agent_credentials` | Replay-resistant, revocable, sin certificados |
 | 5 | Conexión agente↔server | **WSS reverso** (agente inicia) | NAT/firewall transparente |
-| 6 | Generación del bundle | **Server ensambla ZIP** (binario base + `config.json` + install script) por request | Sin compilación en runtime; binarios base vienen de GH Releases BETA |
+| 6 | Generación del bundle | **Server ensambla ZIP** (binario base + `config.json` + install script) por request | Sin compilación en runtime; binarios base vienen de GH Releases |
 | 7 | Panel admin | **React 18 + Vite 5 + TypeScript + i18next + react-router + TanStack Query** servido por backend en `/` | Un proceso; sin CORS |
 | 8 | Idioma | **Español por defecto + Inglés** desde el inicio | `Accept-Language` en backend; i18next en panel |
 | 9 | Bootstrap admin | Flag `--bootstrap` + env vars | Sin usuario inicial en DB |
-| 10 | Distribución BETA | **GitHub Actions** publica binarios + imagen `ghcr.io/naired01/sai` en tags `v*+beta*` | Coherente con el monorepo del usuario |
+| 10 | Distribución de releases | **GitHub Actions** publica binarios + imagen `ghcr.io/naired01/sai` en tags `v*` | Coherente con el monorepo del usuario |
 | 11 | TLS | **Reverse proxy** (NPM) en prod, HTTP plano en dev | Mismo patrón que ZentinelMesh |
 | 12 | Visibilidad agente | `visible`/`invisible` configurable por agente desde panel | Hardening real en Fase 9 |
 
@@ -161,7 +161,7 @@ SAI/
 └── .github/
     └── workflows/
         ├── ci.yml                ← lint + test + build
-        └── release-beta.yml      ← binarios + imagen en tag v*+beta*
+        └── release.yml           ← binarios + imagen en tag v* (+ workflow_dispatch)
 ```
 
 ---
@@ -456,7 +456,7 @@ Reconexión: backoff exponencial con jitter (1s → 5min tope). Re-envía `hello
 
 ## 6. Generación del bundle del agente
 
-1. **CI** compila binarios base (`sai-agent-{windows,linux,darwin}-{amd64,arm64}`) y los publica como artefacto de GH Releases BETA.
+1. **CI** compila binarios base (`sai-agent-{windows,linux,darwin}-{amd64,arm64}`) y los publica como artefacto de GH Releases.
 2. **Server, al arrancar**, valida/lee los binarios de `dist/`.
 3. **`POST /tokens`** crea token; UI muestra botón "Descargar agente".
 4. **`GET /agents/download?token=...&os=...&arch=...`** (público, valida token):
@@ -534,13 +534,13 @@ Multi-stage: `node:22-alpine` (panel) → `golang:1.22-alpine` (server + agente)
 - En `web/`: `npm ci && npm run lint && npm run build`
 - Build de verificación del server.
 
-### `release-beta.yml` (tag `v*+beta*`)
+### `release.yml` (tag `v*` + `workflow_dispatch`)
 1. Build cross-platform del agente (6 targets).
 2. Build del server (linux/amd64 + linux/arm64).
 3. Build del panel web.
-4. Build & push imagen Docker multi-arch → `ghcr.io/naired01/sai:<tag>` + `latest-beta`.
+4. Build & push imagen Docker multi-arch → `ghcr.io/naired01/sai:<tag>` + `latest`.
 5. GitHub Release con binarios adjuntos y notas auto-generadas.
-6. Smoke test: levanta contenedor + Postgres en servicio, golpea `/api/v1/health`.
+6. Smoke test: levanta Postgres en servicio, golpea `/api/v1/health` y `/api/v1/version`.
 
 ---
 
@@ -562,7 +562,7 @@ Multi-stage: `node:22-alpine` (panel) → `golang:1.22-alpine` (server + agente)
 | Fase | Estado | Entregable |
 |---|---|---|
 | **0** | ✅ | Andamiaje repo, go.mod, estructura, docker-compose skeleton |
-| **1** | 🔄 | Auth, tokens, agents, **grupos**, **templates**, **jobs (modelo)**, **audit (tabla+UI)**, **dashboard**, ws hub, bundle, panel básico, i18n, GH Actions BETA |
+| **1** | 🔄 | Auth, tokens, agents, **grupos**, **templates**, **jobs (modelo)**, **audit (tabla+UI)**, **dashboard**, ws hub, bundle, panel básico, i18n, GH Actions (release.yml) |
 | 2 | ⏳ | Inventario HW/SW |
 | 3 | ⏳ | Comandos reales (ejecutados por el agente) |
 | 4 | ⏳ | Scheduled jobs + retry + dependencias |
@@ -597,7 +597,7 @@ Multi-stage: `node:22-alpine` (panel) → `golang:1.22-alpine` (server + agente)
 - [ ] 1.15 cmd/agent-installer
 - [ ] 1.16 Panel React (Login, Dashboard, Agents, Groups, Templates, Jobs, Audit)
 - [ ] 1.17 Dockerfile + docker-compose + .env.example
-- [ ] 1.18 GH Actions ci.yml + release-beta.yml
+- [ ] 1.18 GH Actions ci.yml + release.yml
 - [ ] 1.19 README quickstart final
 
 ---
@@ -609,7 +609,7 @@ Multi-stage: `node:22-alpine` (panel) → `golang:1.22-alpine` (server + agente)
 - `internal/ws/protocol.go` — tipos de mensajes JSON.
 - `internal/bundles/templates/install_windows.ps1.tmpl` — script de instalación.
 - `internal/db/migrations.go` — orden y contenido de migraciones.
-- `.github/workflows/release-beta.yml` — qué se publica y cuándo.
+- `.github/workflows/release.yml` — qué se publica y cuándo.
 
 ---
 

@@ -15,7 +15,7 @@ de hardware/software, trabajos masivos y auditoría.
 - **Panel web** en React + Vite + i18next (Español por defecto, Inglés).
 - **Auditoría inmutable** con filtros; hash-chain preparado para activarse en Fase 10.
 - **Auto-hospedado**: corre en tu infraestructura (Docker o binario nativo).
-- **Distribución BETA** vía GitHub Releases + imagen `ghcr.io/naired01/sai`.
+- **Distribución de releases** vía GitHub Releases + imagen `ghcr.io/naired01/sai` (tags `v*`).
 
 > 📄 El plan detallado (contexto, decisiones, roadmap y checklist por fase) está en [PLAN.md](PLAN.md).
 > Es un documento vivo: consúltalo antes de empezar cualquier trabajo nuevo.
@@ -73,10 +73,10 @@ scripts/     build-release.sh/.ps1
 
 ## Releases
 
-Las releases BETA se publican vía GitHub Actions al pushear tags `v*+beta*`:
+Las releases se publican vía GitHub Actions al pushear tags que comienzan con `v` (ej: `v0.1.0`):
 
 ```bash
-# Última BETA
+# Última release
 VERSION=$(curl -s https://api.github.com/repos/Naired01/SAI/releases/latest | jq -r .tag_name)
 
 # Server
