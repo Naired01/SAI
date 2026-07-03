@@ -63,6 +63,52 @@ docker compose exec server /app/sai-server --bootstrap \
 > - Email ya existe → resetea el password (útil para recuperación).
 > - Email distinto al existente → error. Usa `--force-reset` para reemplazar (¡borra el admin previo!).
 
+## Verificación end-to-end
+
+Una vez el server esté corriendo (Docker o local), podés correr el smoke test que valida 14 endpoints incluyendo auth, CSRF, CRUD y logout:
+
+```bash
+# Compilar
+go build -o bin/smoketest ./cmd/smoketest
+
+# Ejecutar (asume server en :8080 con admin@sai.local / Test#2026)
+SAI_URL=http://localhost:8080 \
+SAI_ADMIN_EMAIL=admin@sai.local \
+SAI_ADMIN_PASSWORD='CambiaEsto#2026' \
+./bin/smoketest
+```
+
+Salida esperada:
+
+```
+[1-5]   health / version / auth/me sin sesión / login / auth/me autenticado -> OK
+[6]     dashboard/summary  -> KPIs: online=0 offline=0 tokens=1 jobs=0
+[7-13]  tokens, agents, groups, templates (6 builtin), audit, logout -> OK
+[14]    auth/me post-logout -> 401 OK
+Resultado: 14/14 tests passed
+```
+
+## Diagnóstico del server (startup + panics)
+
+El server loggea cada paso del arranque con `step=N/name` para identificar exactamente dónde falla:
+
+```
+INFO msg="sai-server startup" step=0/init version=... pid=...
+INFO msg="startup step" step=1/config msg="loading configuration"
+INFO msg="startup ok" step=1/config env=development bind=:8080 ...
+INFO msg="startup step" step=2/db_open msg="connecting to postgres"
+INFO msg="startup ok" step=2/db_open msg="postgres pool ready"
+... 13/logging/listen ...
+INFO msg="startup complete" step=13/listen msg="READY: sai-server is listening" addr=:8080
+```
+
+Cualquier panic durante el arranque se vuelca con stack trace a stderr **y** a `crash.log`:
+
+- `/var/log/sai/crash.log` (Docker)
+- `./sai-server.crash.log` (local)
+
+Subí ambos archivos cuando reportes un bug.
+
 ## Estructura
 
 ```
