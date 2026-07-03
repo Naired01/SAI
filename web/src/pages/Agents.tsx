@@ -1,14 +1,15 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { Link, useSearchParams } from 'react-router-dom'
-import { Search, FolderTree } from 'lucide-react'
+import { Link, useSearchParams, useNavigate } from 'react-router-dom'
+import { Search, FolderTree, KeyRound } from 'lucide-react'
 import { get, type Agent, type Group } from '../lib/api'
 import { StatusBadge } from '../components/StatusBadge'
 
 export function Agents() {
   const { t } = useTranslation()
   const [search, setSearch] = useSearchParams()
+  const nav = useNavigate()
   const groupId = search.get('group_id') || ''
   const ungrouped = search.get('ungrouped') === 'true'
   const status = search.get('status') || ''
@@ -43,7 +44,27 @@ export function Agents() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{t('agents.title')}</h1>
+        <button onClick={() => nav('/tokens')} className="btn-primary">
+          <KeyRound size={16} /> {t('tokens.title')}
+        </button>
       </div>
+
+      {/* Empty state cuando no hay agentes */}
+      {!isLoading && data?.items?.length === 0 && (
+        <div className="card p-8 text-center">
+          <div className="text-base font-medium text-slate-700 mb-1">
+            Sin agentes conectados todavía
+          </div>
+          <p className="text-sm text-slate-500 mb-4">
+            Para enrolar tu primer equipo: creá un enrollment token en{' '}
+            <Link to="/tokens" className="text-brand-700 hover:underline">Tokens</Link>,
+            copiá la URL de descarga, y ejecutá el script de instalación en el equipo destino.
+          </p>
+          <button onClick={() => nav('/tokens')} className="btn-primary">
+            <KeyRound size={16} /> Crear enrollment token
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4">
         {/* Sidebar: groups */}

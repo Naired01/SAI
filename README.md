@@ -130,6 +130,101 @@ Cualquier panic durante el arranque se vuelca con stack trace a stderr **y** a `
 
 Subí ambos archivos cuando reportes un bug.
 
+## Obtener e instalar agentes
+
+Los **agentes** son binarios livianos (~6 MB) que corren como servicio nativo en cada equipo administrado. Se distribuyen como ZIP preconfigurados con `server_url` y `enrollment_token` ya embebidos.
+
+### Flujo end-to-end
+
+```
+[Panel] Admin → Tokens → [+] Crear token → recibe download_url
+   │
+   ▼
+[Equipo destino] Descarga ZIP → descomprime → ejecuta install.ps1 / install.sh
+   │
+   ▼ (al iniciar)
+[Agente] WSS hello → server canjea token → crea agent_id → registra
+   │
+   ▼
+[Panel] Aparece en Agentes con estado "online"
+```
+
+### Paso a paso
+
+1. **Login en el panel** con tu admin (`http://<server>:8080`).
+2. **Menú Tokens** (icono de llave en la sidebar) → **+ Nuevo token**.
+3. Completá:
+   - `Label`: nombre descriptivo (ej. "Laptop Juan Pérez")
+   - `Max uses`: 1 para un solo equipo, N si vas a usar el mismo link en varios
+   - `TTL hours`: ventana de tiempo para que el agente se conecte (ej. 24)
+4. Click **Crear token** → aparece un diálogo con el token en plaintext y la URL de descarga. **Copiá el token ya** — no se vuelve a mostrar.
+5. Descargá el ZIP en el equipo destino:
+   - Click directo en la URL → el browser descarga `sai-agent-{os}-{arch}.zip`
+   - O transferilo por USB / SCP / compartido de archivos / etc.
+6. **En el equipo destino**, ejecutá:
+
+**Windows** (PowerShell como Administrador):
+```powershell
+Expand-Archive -Path sai-agent-windows-amd64.zip
+cd sai-agent-windows-amd64
+.\install.ps1
+# Verificar: Get-Service sai-agent
+# Logs:     Get-Content C:\Logs\SAI\*.log -Tail
+```
+
+**Linux** (root):
+```bash
+unzip sai-agent-linux-amd64.zip
+cd sai-agent-linux-amd64
+sudo ./install.sh
+# Verificar: systemctl status sai-agent
+# Logs:     sudo journalctl -u sai-agent -f
+```
+
+**macOS** (root):
+```bash
+unzip sai-agent-darwin-amd64.zip
+cd sai-agent-darwin-amd64
+sudo ./install.sh
+# Verificar: sudo launchctl list | grep com.sai.agent
+```
+
+7. **El agente se conecta solo** al server, se autentica con el token, y aparece en **Agentes** del panel.
+
+### Vía CLI (sin panel)
+
+Para air-gapped o automatización masiva:
+
+```bash
+# 1. Crear token vía API
+SAI_TOKEN=$(curl -sb cookies.txt -c cookies.txt \
+  -H "Content-Type: application/json" -H "X-CSRF-Token: $CSRF" \
+  -d '{"label":"batch-1","max_uses":50,"ttl_hours":48}' \
+  http://server:8080/api/v1/tokens | jq -r .plain)
+
+# 2. Generar bundle sin tocar el server
+go run ./cmd/agent-installer \
+  --server wss://server.example.com/api/v1/agent/ws \
+  --token "$SAI_TOKEN" \
+  --os windows --arch amd64 \
+  --out bundle-laptop.zip
+```
+
+### De dónde sale el binario
+
+- **Docker**: la imagen `ghcr.io/naired01/sai:vX.Y.Z` ya incluye los 6 binarios del agente en `/app/dist/` (los compila en el stage `go` del Dockerfile).
+- **Local dev**: `./scripts/build-release.sh` cross-compila los 6 targets a `dist/`.
+- **GitHub Releases**: cada tag publica los 6 binarios como assets del release.
+- **Tag Docker `latest`**: cada release BETA/stable también taggea `ghcr.io/naired01/sai:latest`.
+
+### Troubleshooting del download
+
+| Error | Causa | Solución |
+|---|---|---|
+| `binary_not_available` (404) | `dist/` no tiene el binario | Reconstruí la imagen Docker (los binarios van embebidos) o corré `./scripts/build-release.sh` |
+| `invalid_token` (403) | Token expirado / agotado / revocado | Creá uno nuevo en el panel |
+| `missing token` (400) | Falta el query param `token=` | El link del panel ya lo incluye; si lo armás a mano, agregá `?token=XXX` |
+
 ## Estructura
 
 ```
