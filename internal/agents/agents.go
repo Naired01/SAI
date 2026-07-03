@@ -320,9 +320,8 @@ const agentSelect = `
 	SELECT a.id, a.hostname, a.os, COALESCE(a.os_version,''), COALESCE(a.arch,''),
 	       COALESCE(a.agent_version,''), a.enrollment_id, a.labels, a.visibility,
 	       a.last_seen_at, a.first_seen_at, a.created_at, a.updated_at,
-	       COALESCE(array_agg(m.group_id) FILTER (WHERE m.group_id IS NOT NULL), '{}')
+	       COALESCE((SELECT array_agg(group_id) FROM agent_group_members WHERE agent_id = a.id), '{}')
 	FROM agents a
-	LEFT JOIN agent_group_members m ON m.agent_id = a.id
 `
 
 type rowScanner interface {

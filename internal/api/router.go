@@ -65,14 +65,14 @@ func NewRouter(s *Server) http.Handler {
 	// auth
 	r.Route("/api/v1/auth", func(r chi.Router) {
 		r.Post("/login", s.handleLogin)
-		r.With(requireAdmin).Post("/logout", s.handleLogout)
-		r.With(requireAdmin).Get("/me", s.handleMe)
-		r.With(requireAdmin).Get("/csrf", s.handleCSRF)
+		r.With(s.requireAuth()).Post("/logout", s.handleLogout)
+		r.With(s.requireAuth()).Get("/me", s.handleMe)
+		r.With(s.requireAuth()).Get("/csrf", s.handleCSRF)
 	})
 
 	// resources (todos requieren admin)
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(requireAdmin)
+		r.Use(s.requireAuth())
 
 		r.Route("/tokens", func(r chi.Router) {
 			r.Get("/", s.handleTokensList)
@@ -246,71 +246,62 @@ func sessionFromCookie(r *http.Request) string {
 	return c.Value
 }
 
-func requireAdmin(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sid := sessionFromCookie(r)
-		if sid == "" {
-			httpx.RenderUnauthorized(w, r, nil)
-			return
-		}
-		// buscar sesión
-		srv := serverFromContext(r.Context())
-		if srv == nil || srv.Pool == nil {
-			httpx.RenderInternalError(w, r, nil)
-			return
-		}
-		sess, err := auth.LookupSession(r.Context(), srv.Pool, sid)
-		if err != nil {
-			clearSessionCookie(w, false)
-			httpx.RenderUnauthorized(w, r, nil)
-			return
-		}
-		// CSRF para métodos no-GET
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			hdr := r.Header.Get("X-CSRF-Token")
-			if hdr == "" || hdr != sess.CSRFToken {
-				httpx.RenderForbidden(w, r, nil)
+// requireAuth devuelve un middleware que exige sesión admin válida.
+// Se inyecta vía closure con el *Server para acceder al Pool y al Bundle i18n.
+func (s *Server) requireAuth() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sid := sessionFromCookie(r)
+			if sid == "" {
+				httpx.RenderUnauthorized(w, r, s.Bundle)
 				return
 			}
-		}
-		// cargar user
-		var (
-			userID, email, role string
-		)
-		err = srv.Pool.QueryRow(r.Context(),
-			`SELECT id, email, role FROM users WHERE id = $1 AND is_active = TRUE`,
-			sess.UserID).Scan(&userID, &email, &role)
-		if err != nil {
-			httpx.RenderUnauthorized(w, r, nil)
-			return
-		}
-		ctx := context.WithValue(r.Context(), ctxUserID, userID)
-		ctx = context.WithValue(ctx, ctxEmail, email)
-		ctx = context.WithValue(ctx, ctxRole, role)
-		ctx = context.WithValue(ctx, ctxCSRF, sess.CSRFToken)
-		ctx = context.WithValue(ctx, ctxSessionID, sid)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-// serverFromContext devuelve el *Server inyectado por middleware.
-// Para evitar acoplar global, lo inyectamos en NewRouter vía closure:
-// (definido más abajo).
-func serverFromContext(ctx context.Context) *Server {
-	if s, ok := ctx.Value(serverCtxKey{}).(*Server); ok {
-		return s
+			sess, err := auth.LookupSession(r.Context(), s.Pool, sid)
+			if err != nil {
+				clearSessionCookie(w, secureFromRequest(r))
+				httpx.RenderUnauthorized(w, r, s.Bundle)
+				return
+			}
+			// CSRF para métodos no-GET
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				hdr := r.Header.Get("X-CSRF-Token")
+				if hdr == "" || hdr != sess.CSRFToken {
+					httpx.RenderForbidden(w, r, s.Bundle)
+					return
+				}
+			}
+			// cargar user
+			var (
+				userID, email, role string
+			)
+			err = s.Pool.QueryRow(r.Context(),
+				`SELECT id, email, role FROM users WHERE id = $1 AND is_active = TRUE`,
+				sess.UserID).Scan(&userID, &email, &role)
+			if err != nil {
+				clearSessionCookie(w, secureFromRequest(r))
+				httpx.RenderUnauthorized(w, r, s.Bundle)
+				return
+			}
+			ctx := context.WithValue(r.Context(), ctxUserID, userID)
+			ctx = context.WithValue(ctx, ctxEmail, email)
+			ctx = context.WithValue(ctx, ctxRole, role)
+			ctx = context.WithValue(ctx, ctxCSRF, sess.CSRFToken)
+			ctx = context.WithValue(ctx, ctxSessionID, sid)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
 	}
-	return nil
 }
 
-type serverCtxKey struct{}
-
-// Wrap registra el *Server en el contexto de request.
-func (s *Server) wrap(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.WithValue(r.Context(), serverCtxKey{}, s)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+// secureFromRequest devuelve true si la request llegó por HTTPS.
+// Se usa para marcar la cookie como Secure cuando corresponde.
+func secureFromRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if r.Header.Get("X-Forwarded-Proto") == "https" {
+		return true
+	}
+	return false
 }
 
 // -----------------------------------------------------------------------------

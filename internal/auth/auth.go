@@ -144,14 +144,16 @@ type Session struct {
 }
 
 // CreateSession crea una sesión nueva y devuelve el session_id + csrf + expiry.
+// El session_id lo genera Postgres (gen_random_uuid()) para garantizar
+// compatibilidad con el tipo UUID de la columna.
 func CreateSession(ctx context.Context, pool *pgxpool.Pool, userID, userAgent, ip string, ttl time.Duration) (sessionID, csrf string, expires time.Time, err error) {
-	sessionID = newToken(32)
 	csrf = newToken(32)
 	expires = time.Now().Add(ttl)
-	_, err = pool.Exec(ctx, `
-		INSERT INTO sessions (id, user_id, csrf_token, user_agent, ip, expires_at)
-		VALUES ($1, $2, $3, $4, NULLIF($5,'')::inet, $6)
-	`, sessionID, userID, csrf, userAgent, ip, expires)
+	err = pool.QueryRow(ctx, `
+		INSERT INTO sessions (user_id, csrf_token, user_agent, ip, expires_at)
+		VALUES ($1, $2, $3, NULLIF($4,'')::inet, $5)
+		RETURNING id::text
+	`, userID, csrf, userAgent, ip, expires).Scan(&sessionID)
 	return
 }
 

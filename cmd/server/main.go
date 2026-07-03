@@ -12,11 +12,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/Naired01/SAI/internal/agents"
 	"github.com/Naired01/SAI/internal/api"
 	"github.com/Naired01/SAI/internal/auth"
 	"github.com/Naired01/SAI/internal/config"
@@ -29,13 +29,25 @@ import (
 )
 
 func main() {
+	// Captura panics que ocurran ANTES de tener logger configurado
+	// y los escribe a stderr + un archivo crash.log para diagnóstico.
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "\n=== PANIC RECOVERED ===\n")
+			fmt.Fprintf(os.Stderr, "panic: %v\n", r)
+			fmt.Fprintf(os.Stderr, "stack:\n%s\n", debug.Stack())
+			writeCrashLog(r)
+			os.Exit(2)
+		}
+	}()
+
 	var (
-		bootstrap       = flag.Bool("bootstrap", false, "Crear o resetear admin. Comportamiento idempotente: si la tabla users está vacía lo crea; si el email coincide con un admin existente resetea su password; si hay otro admin requiere --force-reset")
-		forceReset      = flag.Bool("force-reset", false, "En --bootstrap, si existe un admin con email distinto al solicitado, lo reemplaza (¡peligroso!)")
-		adminEmail      = flag.String("admin-email", "", "Email del admin a crear/resetear en --bootstrap")
-		adminPassword   = flag.String("admin-password", "", "Password del admin a crear/resetear en --bootstrap")
-		showVersion     = flag.Bool("version", false, "Muestra la versión y sale")
-		healthcheck     = flag.Bool("healthcheck", false, "Probe HTTP al endpoint /api/v1/health y sale 0/1. Usado por Docker HEALTHCHECK.")
+		bootstrap   = flag.Bool("bootstrap", false, "Crear o resetear admin. Comportamiento idempotente.")
+		forceReset  = flag.Bool("force-reset", false, "En --bootstrap, reemplaza admin existente con email distinto.")
+		adminEmail  = flag.String("admin-email", "", "Email del admin a crear/resetear.")
+		adminPass   = flag.String("admin-password", "", "Password del admin a crear/resetear.")
+		showVersion = flag.Bool("version", false, "Muestra la versión y sale.")
+		healthcheck = flag.Bool("healthcheck", false, "Probe HTTP a /api/v1/health (Docker HEALTHCHECK).")
 	)
 	flag.Parse()
 
@@ -45,108 +57,158 @@ func main() {
 	}
 
 	if *healthcheck {
-		// El proceso principal ya está corriendo en otro PID; este solo sondea.
-		client := &http.Client{Timeout: 3 * time.Second}
-		resp, err := client.Get("http://127.0.0.1:8080/api/v1/health")
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "healthcheck: probe failed:", err)
-			os.Exit(1)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			fmt.Fprintln(os.Stderr, "healthcheck: status", resp.StatusCode)
-			os.Exit(1)
-		}
-		os.Exit(0)
+		runHealthcheck()
+		return
 	}
 
 	logger := newLogger(os.Getenv("SAI_LOG_LEVEL"))
 	slog.SetDefault(logger)
 
+	logger.Info("========================================")
+	logger.Info("sai-server startup",
+		"step", "0/init",
+		"version", version.Version,
+		"commit", version.Commit,
+		"built", version.BuildTime,
+		"go_version", version.GoVersion,
+		"pid", os.Getpid(),
+	)
+	logger.Info("========================================")
+
+	// STEP 1: Cargar configuración
+	logger.Info("startup step", "step", "1/config", "msg", "loading configuration")
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Error("config load failed", "err", err)
+		logger.Error("startup failed", "step", "1/config", "err", err)
 		os.Exit(1)
 	}
+	logger.Info("startup ok", "step", "1/config",
+		"env", string(cfg.Env),
+		"bind", cfg.Bind,
+		"log_level", cfg.LogLvl,
+		"db", redactDSN(cfg.DBURL),
+		"bundle_dir", cfg.BundleDir,
+		"web_dist", cfg.WebDist,
+		"default_lang", cfg.DefaultLang,
+	)
 
+	// Setup signal context
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	logger.Info("sai-server starting",
-		"version", version.Version,
-		"env", string(cfg.Env),
-		"bind", cfg.Bind,
-		"db", redactDSN(cfg.DBURL),
-	)
-
-	// DB pool
+	// STEP 2: Abrir pool de DB
+	logger.Info("startup step", "step", "2/db_open", "msg", "connecting to postgres")
 	pool, err := db.Open(ctx, cfg.DBURL)
 	if err != nil {
-		logger.Error("db open failed", "err", err)
+		logger.Error("startup failed", "step", "2/db_open", "err", err, "hint", "verifica SAI_DB_URL, que postgres esté arriba, y credenciales")
 		os.Exit(1)
 	}
-	defer pool.Close()
+	defer func() {
+		logger.Info("shutdown", "step", "shutdown/db_close", "msg", "closing db pool")
+		pool.Close()
+	}()
+	logger.Info("startup ok", "step", "2/db_open", "msg", "postgres pool ready")
 
-	// Migraciones
+	// STEP 3: Aplicar migraciones
+	logger.Info("startup step", "step", "3/migrate", "msg", "applying migrations")
 	if err := pool.Migrate(ctx); err != nil {
-		logger.Error("migrations failed", "err", err)
+		logger.Error("startup failed", "step", "3/migrate", "err", err)
 		os.Exit(1)
 	}
-	logger.Info("migrations applied")
+	logger.Info("startup ok", "step", "3/migrate", "msg", "migrations applied")
 
-	// i18n bundle
+	// STEP 4: Cargar i18n
+	logger.Info("startup step", "step", "4/i18n", "msg", "loading i18n bundle", "default_lang", cfg.DefaultLang)
 	bundle, err := i18n.NewBundle(cfg.DefaultLang)
 	if err != nil {
-		logger.Error("i18n bundle", "err", err)
+		logger.Error("startup failed", "step", "4/i18n", "err", err)
 		os.Exit(1)
 	}
+	logger.Info("startup ok", "step", "4/i18n", "languages", bundle.Languages())
 
-	// Seed templates builtin (idempotente)
+	// STEP 5: Seed templates builtin
+	logger.Info("startup step", "step", "5/seed_templates", "msg", "seeding builtin templates")
 	if err := templates.SeedBuiltins(ctx, pool.Pool); err != nil {
-		logger.Warn("seed templates failed (non-fatal)", "err", err)
+		logger.Warn("startup warn", "step", "5/seed_templates", "err", err, "msg", "continuing without builtin templates")
+	} else {
+		logger.Info("startup ok", "step", "5/seed_templates", "msg", "builtin templates ensured")
 	}
 
-	// Bootstrap admin si se pidió
+	// STEP 6: Bootstrap admin (si se pidió)
 	if *bootstrap || cfg.BootstrapEmail != "" {
 		email := *adminEmail
 		if email == "" {
 			email = cfg.BootstrapEmail
 		}
-		password := *adminPassword
+		password := *adminPass
 		if password == "" {
 			password = cfg.BootstrapPassword
 		}
 		if email == "" || password == "" {
-			logger.Error("--bootstrap requires --admin-email and --admin-password (or env vars SAI_BOOTSTRAP_EMAIL/SAI_BOOTSTRAP_PASSWORD)")
+			logger.Error("startup failed", "step", "6/bootstrap",
+				"err", "missing credentials",
+				"hint", "pasa --admin-email y --admin-password (o env SAI_BOOTSTRAP_EMAIL/SAI_BOOTSTRAP_PASSWORD)")
 			os.Exit(1)
 		}
+		logger.Info("startup step", "step", "6/bootstrap", "msg", "running bootstrap", "email", email, "force_reset", *forceReset)
 		if err := bootstrapAdmin(ctx, pool.Pool, email, password, *forceReset); err != nil {
-			logger.Error("bootstrap admin failed", "err", err)
+			logger.Error("startup failed", "step", "6/bootstrap", "err", err)
 			os.Exit(1)
 		}
-		logger.Info("bootstrap admin ready", "email", email)
-		return // --bootstrap es una acción única, no levanta el server
+		logger.Info("startup ok", "step", "6/bootstrap", "email", email, "msg", "bootstrap complete; exiting (no server started)")
+		return
 	}
 
-	// Resolver bundle dir
+	// STEP 7: Resolver bundle dir (binarios del agente)
+	logger.Info("startup step", "step", "7/bundle_dir", "msg", "resolving agent bundle dir", "path", cfg.BundleDir)
 	bundleDir := cfg.BundleDir
 	if abs, err := filepath.Abs(bundleDir); err == nil {
 		bundleDir = abs
 	}
-	if entries, err := os.ReadDir(bundleDir); err == nil {
-		logger.Info("agent bundle dir", "path", bundleDir, "entries", len(entries))
+	if entries, err := os.ReadDir(bundleDir); err != nil {
+		logger.Warn("startup warn", "step", "7/bundle_dir",
+			"path", bundleDir, "err", err,
+			"msg", "agent downloads will fail until binaries are placed in this dir")
+	} else {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		logger.Info("startup ok", "step", "7/bundle_dir",
+			"path", bundleDir, "count", len(entries), "files", strings.Join(names, ","))
 	}
 
-	// Resolver web dist
+	// STEP 8: Verificar web dist (panel)
+	logger.Info("startup step", "step", "8/web_dist", "msg", "checking web dist", "path", cfg.WebDist)
 	webDist := cfg.WebDist
-	if _, err := os.Stat(webDist); err != nil {
-		logger.Warn("web dist not found (panel will not be served)", "path", webDist, "err", err)
+	if abs, err := filepath.Abs(webDist); err == nil {
+		webDist = abs
+	}
+	if info, err := os.Stat(webDist); err != nil {
+		logger.Warn("startup warn", "step", "8/web_dist",
+			"path", webDist, "err", err,
+			"msg", "panel will not be served (404 on /)")
+	} else if !info.IsDir() {
+		logger.Warn("startup warn", "step", "8/web_dist",
+			"path", webDist, "msg", "path exists but is not a directory")
+	} else {
+		indexPath := filepath.Join(webDist, "index.html")
+		if _, err := os.Stat(indexPath); err != nil {
+			logger.Warn("startup warn", "step", "8/web_dist",
+				"path", webDist, "err", err,
+				"msg", "web dist dir exists but index.html is missing; panel will not be served")
+		} else {
+			logger.Info("startup ok", "step", "8/web_dist", "path", webDist)
+		}
 	}
 
-	// WS hub
+	// STEP 9: WS hub
+	logger.Info("startup step", "step", "9/ws_hub", "msg", "initializing websocket hub")
 	hub := ws.NewHub()
+	logger.Info("startup ok", "step", "9/ws_hub")
 
-	// API server
+	// STEP 10: API server
+	logger.Info("startup step", "step", "10/api_server", "msg", "building api server")
 	srv := &api.Server{
 		Pool:           pool.Pool,
 		BundleDir:      bundleDir,
@@ -159,8 +221,12 @@ func main() {
 		Logger:         logger,
 		StartTime:      time.Now(),
 	}
+	logger.Info("startup step", "step", "10/api_server", "msg", "building router")
 	router := api.NewRouter(srv)
+	logger.Info("startup ok", "step", "10/api_server")
 
+	// STEP 11: HTTP server
+	logger.Info("startup step", "step", "11/http_server", "msg", "configuring http server", "addr", cfg.Bind)
 	httpSrv := &http.Server{
 		Addr:              cfg.Bind,
 		Handler:           router,
@@ -169,8 +235,10 @@ func main() {
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	logger.Info("startup ok", "step", "11/http_server")
 
-	// Background: purga de sesiones expiradas cada hora
+	// STEP 12: Background session purger
+	logger.Info("startup step", "step", "12/bg_purger", "msg", "starting session purger goroutine")
 	go func() {
 		t := time.NewTicker(1 * time.Hour)
 		defer t.Stop()
@@ -185,27 +253,58 @@ func main() {
 			}
 		}
 	}()
+	logger.Info("startup ok", "step", "12/bg_purger")
 
-	// Listen
+	// STEP 13: Listen (TCP bind + serve)
+	logger.Info("startup step", "step", "13/listen", "msg", "binding tcp and starting serve", "addr", cfg.Bind)
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("listening", "addr", cfg.Bind)
+		logger.Info("startup complete", "step", "13/listen",
+			"msg", "READY: sai-server is listening",
+			"addr", cfg.Bind,
+			"public_url", cfg.PublicURL,
+			"env", string(cfg.Env),
+		)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
 
+	// Esperar señal o error fatal
 	select {
 	case <-ctx.Done():
-		logger.Info("shutdown signal received")
+		logger.Info("shutdown signal received", "signal", "SIGINT/SIGTERM")
 	case err := <-errCh:
-		logger.Error("http server error", "err", err)
+		logger.Error("http server fatal error", "err", err, "hint", "chequear puerto en uso, permisos, o ulimits")
 	}
 
+	// Graceful shutdown
+	logger.Info("shutdown", "msg", "starting graceful shutdown", "timeout", "10s")
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelShutdown()
-	_ = httpSrv.Shutdown(shutdownCtx)
-	logger.Info("bye")
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("shutdown error", "err", err)
+	}
+	logger.Info("bye", "msg", "sai-server exited cleanly")
+}
+
+// -----------------------------------------------------------------------------
+// healthcheck probe
+// -----------------------------------------------------------------------------
+
+func runHealthcheck() {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://127.0.0.1:8080/api/v1/health")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck: probe failed: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "healthcheck: unexpected status %d\n", resp.StatusCode)
+		os.Exit(1)
+	}
+	os.Exit(0)
 }
 
 // -----------------------------------------------------------------------------
@@ -224,8 +323,63 @@ func newLogger(level string) *slog.Logger {
 	default:
 		lv = slog.LevelInfo
 	}
-	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lv})
-	return slog.New(h)
+	// Multi-handler: stderr (tiempo real) + archivo (persistente, útil en docker).
+	writers := []slog.Handler{
+		slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lv}),
+	}
+	if f, err := openLogFile(); err == nil {
+		writers = append(writers, slog.NewTextHandler(f, &slog.HandlerOptions{Level: lv}))
+	}
+	return slog.New(multiHandler(writers))
+}
+
+type multiHandler []slog.Handler
+
+func (m multiHandler) Enabled(ctx context.Context, l slog.Level) bool {
+	for _, h := range m {
+		if h.Enabled(ctx, l) {
+			return true
+		}
+	}
+	return false
+}
+func (m multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	for _, h := range m {
+		if h.Enabled(ctx, r.Level) {
+			_ = h.Handle(ctx, r.Clone())
+		}
+	}
+	return nil
+}
+func (m multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	out := make(multiHandler, len(m))
+	for i, h := range m {
+		out[i] = h.WithAttrs(attrs)
+	}
+	return out
+}
+func (m multiHandler) WithGroup(name string) slog.Handler {
+	out := make(multiHandler, len(m))
+	for i, h := range m {
+		out[i] = h.WithGroup(name)
+	}
+	return out
+}
+
+func openLogFile() (*os.File, error) {
+	paths := []string{"/var/log/sai/server.log", "./sai-server.log"}
+	for _, p := range paths {
+		if dir := filepath.Dir(p); dir != "." && dir != "" {
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				continue
+			}
+		}
+		f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			return f, nil
+		}
+	}
+	return nil, errors.New("no se pudo abrir archivo de log")
 }
 
 func redactDSN(dsn string) string {
@@ -235,6 +389,23 @@ func redactDSN(dsn string) string {
 		}
 	}
 	return dsn
+}
+
+func writeCrashLog(r any) {
+	paths := []string{"/var/log/sai/crash.log", "./sai-server.crash.log"}
+	for _, p := range paths {
+		if dir := filepath.Dir(p); dir != "." && dir != "" {
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				continue
+			}
+		}
+		body := fmt.Sprintf("panic: %v\ntime: %s\npid: %d\nversion: %s\nstack:\n%s\n",
+			r, time.Now().Format(time.RFC3339), os.Getpid(), version.Version, debug.Stack())
+		if err := os.WriteFile(p, []byte(body), 0644); err == nil {
+			fmt.Fprintf(os.Stderr, "crash log written to %s\n", p)
+			return
+		}
+	}
 }
 
 func bootstrapAdmin(ctx context.Context, pool *pgxpool.Pool, email, password string, forceReset bool) error {
@@ -324,6 +495,3 @@ func bootstrapAdmin(ctx context.Context, pool *pgxpool.Pool, email, password str
 	}
 	return nil
 }
-
-// silenciar import unused
-var _ = agents.VisibilityVisible

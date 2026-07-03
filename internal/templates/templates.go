@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,21 +17,21 @@ import (
 
 // Template representa una plantilla de comando.
 type Template struct {
-	ID                string   `json:"id"`
-	Name              string   `json:"name"`
-	Description       string   `json:"description,omitempty"`
-	Category          string   `json:"category"`
-	Command           string   `json:"command"`
-	Args              []string `json:"args"`
-	WorkingDir        string   `json:"working_dir,omitempty"`
-	TimeoutSeconds    int      `json:"timeout_seconds"`
-	RequiresElevation bool     `json:"requires_elevation"`
-	RequiresConfirm   bool     `json:"requires_confirm"`
-	IsBuiltin         bool     `json:"is_builtin"`
-	ShowInDashboard   bool     `json:"show_in_dashboard"`
-	Icon              string   `json:"icon,omitempty"`
-	CreatedAt         string   `json:"created_at"`
-	UpdatedAt         string   `json:"updated_at"`
+	ID                string    `json:"id"`
+	Name              string    `json:"name"`
+	Description       string    `json:"description,omitempty"`
+	Category          string    `json:"category"`
+	Command           string    `json:"command"`
+	Args              []string  `json:"args"`
+	WorkingDir        string    `json:"working_dir,omitempty"`
+	TimeoutSeconds    int       `json:"timeout_seconds"`
+	RequiresElevation bool      `json:"requires_elevation"`
+	RequiresConfirm   bool      `json:"requires_confirm"`
+	IsBuiltin         bool      `json:"is_builtin"`
+	ShowInDashboard   bool      `json:"show_in_dashboard"`
+	Icon              string    `json:"icon,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // CreateInput body para POST /templates.

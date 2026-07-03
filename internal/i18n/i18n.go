@@ -65,7 +65,11 @@ func (b *Bundle) Languages() []string {
 
 // T devuelve el mensaje para la clave en el idioma del contexto.
 // Si no existe en el idioma, cae al fallback; si tampoco, devuelve la clave.
+// Nil-safe: si b es nil devuelve la clave tal cual.
 func (b *Bundle) T(ctx context.Context, key string) string {
+	if b == nil {
+		return key
+	}
 	lang := LangFromContext(ctx)
 	return b.Lookup(lang, key)
 }

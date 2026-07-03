@@ -1,0 +1,282 @@
+// Command smoketest verifica end-to-end que el server funciona:
+//
+//  1. /api/v1/health          (público)
+//  2. /api/v1/version         (público)
+//  3. POST /api/v1/auth/login (autenticación)
+//  4. /api/v1/auth/me         (con cookie)
+//  5. /api/v1/dashboard/summary
+//  6. POST /api/v1/tokens     (crea enrollment token con CSRF)
+//  7. /api/v1/audit/events
+//  8. POST /api/v1/auth/logout
+//
+// Uso:
+//
+//	SAI_URL=http://127.0.0.1:8080 \
+//	SAI_ADMIN_EMAIL=admin@sai.local \
+//	SAI_ADMIN_PASSWORD=Test#2026 \
+//	go run ./cmd/smoketest
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
+	"os"
+	"strings"
+	"time"
+)
+
+var pass, fail int
+
+type apiResp struct {
+	status int
+	body   []byte
+	ct     string
+}
+
+func main() {
+	base := os.Getenv("SAI_URL")
+	if base == "" {
+		base = "http://127.0.0.1:8080"
+	}
+	email := os.Getenv("SAI_ADMIN_EMAIL")
+	password := os.Getenv("SAI_ADMIN_PASSWORD")
+	if email == "" {
+		email = "admin@sai.local"
+	}
+	if password == "" {
+		password = "Test#2026"
+	}
+
+	fmt.Printf("=== SAI smoke test ===\n")
+	fmt.Printf("URL:       %s\n", base)
+	fmt.Printf("Email:     %s\n", email)
+	fmt.Printf("\n")
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{
+		Jar:     jar,
+		Timeout: 5 * time.Second,
+	}
+
+	check := func(name string, code, expect int, body []byte) {
+		if code == expect {
+			fmt.Printf("  [PASS] %s -> %d\n", name, code)
+			pass++
+		} else {
+			fmt.Printf("  [FAIL] %s -> got %d, expected %d\n", name, code, expect)
+			fmt.Printf("         body: %s\n", truncate(string(body), 200))
+			fail++
+		}
+	}
+
+	get := func(path string) apiResp { return do(client, "GET", base+path, nil) }
+	post := func(path string, body any) apiResp {
+		var r io.Reader
+		if body != nil {
+			b, _ := json.Marshal(body)
+			r = bytes.NewReader(b)
+		}
+		return do(client, "POST", base+path, r)
+	}
+
+	// 1. Health
+	fmt.Println("[1] /api/v1/health (público, debe ser 200)")
+	r := get("/api/v1/health")
+	check("health", r.status, 200, r.body)
+
+	// 2. Version
+	fmt.Println("[2] /api/v1/version (público)")
+	r = get("/api/v1/version")
+	check("version", r.status, 200, r.body)
+
+	// 3. Auth/me sin sesión (debe ser 401)
+	fmt.Println("[3] /api/v1/auth/me sin sesión (debe ser 401)")
+	r = get("/api/v1/auth/me")
+	check("auth/me sin sesión", r.status, 401, r.body)
+
+	// 4. Login
+	fmt.Println("[4] POST /api/v1/auth/login")
+	r = post("/api/v1/auth/login", map[string]string{
+		"email":    email,
+		"password": password,
+	})
+	check("login", r.status, 200, r.body)
+	if r.status != 200 {
+		fmt.Println("\nCannot continue without login; aborting.")
+		os.Exit(1)
+	}
+	var loginResp struct {
+		User   map[string]any `json:"user"`
+		CSRF   string         `json:"csrf"`
+		Expiry string         `json:"expires_at"`
+	}
+	_ = json.Unmarshal(r.body, &loginResp)
+	csrf := loginResp.CSRF
+	fmt.Printf("         user.email = %v\n", loginResp.User["email"])
+	fmt.Printf("         csrf       = %s...\n", csrf[:min(16, len(csrf))])
+
+	// 5. /auth/me autenticado
+	fmt.Println("[5] /api/v1/auth/me con cookie (debe ser 200)")
+	r = get("/api/v1/auth/me")
+	check("auth/me autenticado", r.status, 200, r.body)
+
+	// 6. Dashboard
+	fmt.Println("[6] /api/v1/dashboard/summary")
+	r = get("/api/v1/dashboard/summary")
+	check("dashboard/summary", r.status, 200, r.body)
+	if r.status == 200 {
+		var sum struct {
+			KPIs struct {
+				Online  int `json:"agents_online"`
+				Offline int `json:"agents_offline"`
+				Tokens  int `json:"active_tokens"`
+				Jobs    int `json:"running_jobs"`
+			} `json:"kpis"`
+		}
+		_ = json.Unmarshal(r.body, &sum)
+		fmt.Printf("         KPIs: online=%d offline=%d tokens=%d jobs=%d\n",
+			sum.KPIs.Online, sum.KPIs.Offline, sum.KPIs.Tokens, sum.KPIs.Jobs)
+	}
+
+	// 7. Crear token (POST con CSRF)
+	fmt.Println("[7] POST /api/v1/tokens (con CSRF)")
+	r = withCSRF(client, "POST", base+"/api/v1/tokens", csrf, map[string]any{
+		"label":     "smoke-test",
+		"max_uses":  1,
+		"ttl_hours": 24,
+	})
+	check("crear token", r.status, 201, r.body)
+
+	// 8. Listar tokens
+	fmt.Println("[8] GET /api/v1/tokens")
+	r = get("/api/v1/tokens")
+	check("listar tokens", r.status, 200, r.body)
+
+	// 9. Listar agentes
+	fmt.Println("[9] GET /api/v1/agents")
+	r = get("/api/v1/agents")
+	check("listar agentes", r.status, 200, r.body)
+
+	// 10. Listar grupos
+	fmt.Println("[10] GET /api/v1/groups")
+	r = get("/api/v1/groups")
+	check("listar grupos", r.status, 200, r.body)
+
+	// 11. Listar templates
+	fmt.Println("[11] GET /api/v1/templates")
+	r = get("/api/v1/templates")
+	check("listar templates", r.status, 200, r.body)
+	if r.status == 200 {
+		var t struct {
+			Items []struct {
+				Name     string `json:"name"`
+				IsBuiltin bool  `json:"is_builtin"`
+			} `json:"items"`
+		}
+		_ = json.Unmarshal(r.body, &t)
+		fmt.Printf("         %d templates cargados:\n", len(t.Items))
+		for i, item := range t.Items {
+			if i >= 6 {
+				fmt.Printf("         ... (+%d más)\n", len(t.Items)-6)
+				break
+			}
+			builtin := ""
+			if item.IsBuiltin {
+				builtin = " [builtin]"
+			}
+			fmt.Printf("           - %s%s\n", item.Name, builtin)
+		}
+	}
+
+	// 12. Audit
+	fmt.Println("[12] GET /api/v1/audit/events")
+	r = get("/api/v1/audit/events?per_page=5")
+	check("audit/events", r.status, 200, r.body)
+
+	// 13. Logout (POST con CSRF)
+	fmt.Println("[13] POST /api/v1/auth/logout (con CSRF)")
+	r = withCSRF(client, "POST", base+"/api/v1/auth/logout", csrf, nil)
+	check("logout", r.status, 200, r.body)
+
+	// 14. /auth/me post-logout (debe ser 401)
+	fmt.Println("[14] /api/v1/auth/me después de logout (debe ser 401)")
+	r = get("/api/v1/auth/me")
+	check("auth/me post-logout", r.status, 401, r.body)
+
+	// Resumen
+	fmt.Println()
+	fmt.Println("===============================================")
+	fmt.Printf("Resultado: %d/%d tests passed\n", pass, pass+fail)
+	if fail > 0 {
+		fmt.Println("FAILED")
+		os.Exit(1)
+	}
+	fmt.Println("OK")
+}
+
+// -----------------------------------------------------------------------------
+// helpers
+// -----------------------------------------------------------------------------
+
+func do(client *http.Client, method, url string, body io.Reader) apiResp {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return apiResp{status: -1, body: []byte(err.Error())}
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return apiResp{status: -1, body: []byte(err.Error())}
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return apiResp{status: resp.StatusCode, body: b, ct: resp.Header.Get("Content-Type")}
+}
+
+func withCSRF(client *http.Client, method, urlStr, csrf string, body any) apiResp {
+	var r io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		r = bytes.NewReader(b)
+	}
+	req, err := http.NewRequest(method, urlStr, r)
+	if err != nil {
+		return apiResp{status: -1, body: []byte(err.Error())}
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("X-CSRF-Token", csrf)
+	resp, err := client.Do(req)
+	if err != nil {
+		return apiResp{status: -1, body: []byte(err.Error())}
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return apiResp{status: resp.StatusCode, body: b}
+}
+
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "..."
+	}
+	return s
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// _ silencia import no usado si en algún momento agregamos
+var _ = strings.TrimSpace
+var _ = url.Parse
