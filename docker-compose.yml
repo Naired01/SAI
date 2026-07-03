@@ -42,6 +42,13 @@ services:
       SAI_WEB_DIST: /app/web
       SAI_DEFAULT_LANG: ${SAI_DEFAULT_LANG:-es}
       SAI_LOG_LEVEL: ${SAI_LOG_LEVEL:-info}
+      # SAI_BOOTSTRAP_*: opcional. Auto-bootstrap SOLO en primer arranque,
+      # cuando la tabla `users` está vacía (crea el admin). NO se vuelve a
+      # aplicar en reinicios posteriores y NUNCA resetea contraseñas existentes.
+      # Para rotación/reemplazo de admin en cualquier momento, usar el flag
+      # CLI dentro del container:
+      #   docker compose exec server /app/sai-server --bootstrap \
+      #       --admin-email X --admin-password Y [--force-reset]
       SAI_BOOTSTRAP_EMAIL: ${SAI_BOOTSTRAP_EMAIL:-}
       SAI_BOOTSTRAP_PASSWORD: ${SAI_BOOTSTRAP_PASSWORD:-}
     ports:

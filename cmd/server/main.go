@@ -134,8 +134,29 @@ func main() {
 		logger.Info("startup ok", "step", "5/seed_templates", "msg", "builtin templates ensured")
 	}
 
-	// STEP 6: Bootstrap admin (si se pidió)
-	if *bootstrap || cfg.BootstrapEmail != "" {
+	// STEP 6: Bootstrap admin
+	//
+	// Hay DOS caminos completamente independientes:
+	//
+	// A) CLI explícito (`--bootstrap`): operator-driven, one-shot. Crea/resetea
+	//    admin y SALE del proceso. No arranca el servidor. Usado desde
+	//    `docker compose exec … --bootstrap` o `go run ./cmd/server --bootstrap …`.
+	//
+	// B) Auto-bootstrap silencioso por env vars (`SAI_BOOTSTRAP_EMAIL` +
+	//    `SAI_BOOTSTRAP_PASSWORD`): se evalúa al arrancar el server como un
+	//    paso normal de startup. Sólo crea el admin en una DB fresca
+	//    (tabla `users` vacía). Si ya existe cualquier usuario, NO TOCA
+	//    contraseñas. Tras el chequeo (con o sin creación) el flujo continúa
+	//    al STEP 7 para arrancar el HTTP server.
+	//
+	// Esta separación evita el bug "loop de reinicios": antes, ambos caminos
+	// compartían la misma rama y hacían `return` al final, exitando el proceso
+	// al arrancar el container y haciendo que `restart: unless-stopped` lo
+	// levantara otra vez — y otra — generando además un reset silencioso de la
+	// contraseña del admin existente en cada reinicio.
+
+	// Camino A: CLI bootstrap (one-shot, sale tras éxito)
+	if *bootstrap {
 		email := *adminEmail
 		if email == "" {
 			email = cfg.BootstrapEmail
@@ -145,18 +166,39 @@ func main() {
 			password = cfg.BootstrapPassword
 		}
 		if email == "" || password == "" {
-			logger.Error("startup failed", "step", "6/bootstrap",
+			logger.Error("startup failed", "step", "6/bootstrap", "mode", "cli",
 				"err", "missing credentials",
 				"hint", "pasa --admin-email y --admin-password (o env SAI_BOOTSTRAP_EMAIL/SAI_BOOTSTRAP_PASSWORD)")
 			os.Exit(1)
 		}
-		logger.Info("startup step", "step", "6/bootstrap", "msg", "running bootstrap", "email", email, "force_reset", *forceReset)
-		if err := bootstrapAdmin(ctx, pool.Pool, email, password, *forceReset); err != nil {
-			logger.Error("startup failed", "step", "6/bootstrap", "err", err)
+		logger.Info("startup step", "step", "6/bootstrap", "mode", "cli",
+			"msg", "running CLI bootstrap (one-shot, will exit)", "email", email, "force_reset", *forceReset)
+		if err := bootstrapAdminCLI(ctx, pool.Pool, email, password, *forceReset); err != nil {
+			logger.Error("startup failed", "step", "6/bootstrap", "mode", "cli", "err", err)
 			os.Exit(1)
 		}
-		logger.Info("startup ok", "step", "6/bootstrap", "email", email, "msg", "bootstrap complete; exiting (no server started)")
+		logger.Info("startup ok", "step", "6/bootstrap", "mode", "cli",
+			"email", email, "msg", "bootstrap complete; exiting (no server started)")
 		return
+	}
+
+	// Camino B: Auto-bootstrap silencioso desde env vars
+	if cfg.BootstrapEmail != "" && cfg.BootstrapPassword != "" {
+		logger.Info("startup step", "step", "6/bootstrap", "mode", "startup",
+			"msg", "checking first-run auto-bootstrap", "email", cfg.BootstrapEmail)
+		n, created, err := bootstrapAdminStartup(ctx, pool.Pool, cfg.BootstrapEmail, cfg.BootstrapPassword)
+		if err != nil {
+			logger.Error("startup failed", "step", "6/bootstrap", "mode", "startup", "err", err)
+			os.Exit(1)
+		}
+		if created {
+			logger.Info("startup ok", "step", "6/bootstrap", "mode", "startup",
+				"email", cfg.BootstrapEmail, "msg", "admin created on empty DB")
+		} else {
+			logger.Info("startup ok", "step", "6/bootstrap", "mode", "startup",
+				"msg", "skipping auto-bootstrap; users table already populated",
+				"users", n)
+		}
 	}
 
 	// STEP 7: Resolver bundle dir (binarios del agente)
@@ -408,7 +450,20 @@ func writeCrashLog(r any) {
 	}
 }
 
-func bootstrapAdmin(ctx context.Context, pool *pgxpool.Pool, email, password string, forceReset bool) error {
+// bootstrapAdminCLI es el bootstrap "operator-driven" usado por el flag CLI
+// --bootstrap. Es idempotente y soporta rotación/reemplazo de credenciales:
+//   - DB vacía         → crea admin con el email/password dados.
+//   - 1 usuario, mismo email → resetea el password (olvido de contraseña).
+//   - 1 usuario, email distinto → rechaza salvo --force-reset, en cuyo caso
+//     borra al admin previo y crea uno nuevo.
+//
+// Tras ejecutarse exitosamente, el caller hace `return` desde main: el server
+// NO arranca. Éste es el modo que mantienen los scripts verify-docker.sh/ps1
+// y el quickstart del README.
+//
+// Para auto-bootstrap en primer arranque desde env vars, ver
+// bootstrapAdminStartup más abajo.
+func bootstrapAdminCLI(ctx context.Context, pool *pgxpool.Pool, email, password string, forceReset bool) error {
 	hash, err := auth.HashPassword(password)
 	if err != nil {
 		return err
@@ -494,4 +549,46 @@ func bootstrapAdmin(ctx context.Context, pool *pgxpool.Pool, email, password str
 		return fmt.Errorf("users table has %d users; bootstrap only works on a fresh DB (1 user). Use SQL to manage existing users", len(existing))
 	}
 	return nil
+}
+
+// bootstrapAdminStartup es el auto-bootstrap "de primer arranque" que se evalúa
+// como un paso más de startup cuando SAI_BOOTSTRAP_EMAIL y SAI_BOOTSTRAP_PASSWORD
+// están definidas en el entorno. Su semántica es deliberadamente conservadora:
+//
+//   - Cuenta cuántos usuarios existen en la tabla `users`.
+//   - Si hay 0 usuarios (DB fresca) → crea el admin con el email/password dados
+//     y registra un audit_event. Devuelve created=true.
+//   - Si hay ≥1 usuario → NO TOCA nada. Devuelve created=false y el caller
+//     registra el skip en el log. Esto es la pieza crítica del fix:
+//     antes, este camino reusaba la lógica CLI y reseteaba silenciosamente
+//     la contraseña del admin existente en cada restart del container.
+//
+// Tras retornar, el caller continúa al STEP 7 (el server SIEMPRE arranca).
+//
+// Devuelve (usersCount, created, error).
+func bootstrapAdminStartup(ctx context.Context, pool *pgxpool.Pool, email, password string) (int, bool, error) {
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return 0, false, err
+	}
+
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+		return 0, false, err
+	}
+	if n > 0 {
+		return n, false, nil
+	}
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO users (email, password_hash, role, is_active)
+		VALUES ($1, $2, 'admin', TRUE)
+	`, email, hash); err != nil {
+		return 0, false, err
+	}
+	_, _ = pool.Exec(ctx, `
+		INSERT INTO audit_events (actor_type, actor_label, action, metadata)
+		VALUES ('system', 'system', 'system.bootstrap_admin_startup', jsonb_build_object('email', $1::text, 'mode', 'first_run'))
+	`, email)
+	return 1, true, nil
 }

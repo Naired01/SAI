@@ -63,6 +63,20 @@ docker compose exec server /app/sai-server --bootstrap \
 > - Email ya existe → resetea el password (útil para recuperación).
 > - Email distinto al existente → error. Usa `--force-reset` para reemplazar (¡borra el admin previo!).
 
+### Bootstrap en primer arranque (env vars) vs `--bootstrap` (CLI)
+
+Hay **dos mecanismos independientes** y no hacen lo mismo:
+
+| Mecanismo | Cuándo se ejecuta | Qué pasa tras ejecutarse | Cuándo usarlo |
+|---|---|---|---|
+| `SAI_BOOTSTRAP_EMAIL` + `SAI_BOOTSTRAP_PASSWORD` en `.env` | Cada arranque del server, como un paso normal de startup (STEP 6) | Sólo si la tabla `users` está **vacía** crea el admin. Si ya hay usuarios, **no hace nada** (no resetea contraseñas). El server **continúa arrancando** siempre. | Provisionar el primer admin al levantar un stack nuevo. |
+| `docker compose exec server /app/sai-server --bootstrap --admin-email X --admin-password Y` | Cuando el operador lo corre manualmente dentro del container | Crea o resetea el admin (reglas idempotentes de la tabla de arriba) **y sale del proceso**. No arranca el servidor. | Rotar/recuperar contraseñas, o reemplazar admin existente con `--force-reset`. |
+
+> **Importante**: dejar `SAI_BOOTSTRAP_*` en el `.env` después del primer
+> arranque es seguro e inerte. No se reaplica, no resetea credenciales, y no
+> causa reinicios del container (este era el bug de "loop infinito" que se
+> daba cuando ambos caminos compartían la rama que hacía `exit` tras bootstrap).
+
 ## Verificación end-to-end
 
 **Opción automática (Docker):** corre build → up → healthcheck → bootstrap → smoke test en un solo comando:
