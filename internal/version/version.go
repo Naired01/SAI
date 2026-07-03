@@ -11,7 +11,7 @@ var (
 	Version   = "0.1.0-dev"
 	Commit    = "unknown"
 	BuildTime = "unknown"
-	GoVersion = "1.22+"
+	GoVersion = "1.25+"
 )
 
 // Info devuelve la metadata lista para serializar.

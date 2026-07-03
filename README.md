@@ -1,7 +1,7 @@
 # SAI
 
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/Naired01/SAI/releases)
-[![Go](https://img.shields.io/badge/go-1.22+-00ADD8.svg)](https://go.dev)
+[![Go](https://img.shields.io/badge/go-1.25+-00ADD8.svg)](https://go.dev)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 **SAI** — Sistema de Administración de Equipos para TI.
@@ -24,7 +24,7 @@ de hardware/software, trabajos masivos y auditoría.
 
 ## Quickstart (desarrollo)
 
-Requisitos: Go 1.22+, Node 20+, Docker (recomendado) o PostgreSQL 16 local.
+Requisitos: Go 1.25+, Node 20+, Docker (recomendado) o PostgreSQL 16 local.
 
 ```bash
 # 1. Levantar Postgres

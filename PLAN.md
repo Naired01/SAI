@@ -3,7 +3,7 @@
 > Sistema de administración remota para equipos de TI, auto-hospedado.
 > Documento vivo: incluye contexto para nuevos agentes + checklist de progreso por fase.
 >
-> **Stack**: Go 1.22+ (chi + gorilla/websocket + pgx) + PostgreSQL 16 + React/Vite/i18next (panel) + Docker + GitHub Actions.
+> **Stack**: Go 1.25+ (chi + gorilla/websocket + pgx) + PostgreSQL 16 + React/Vite/i18next (panel) + Docker + GitHub Actions.
 > **Estado**: 🟡 v1.1 aprobado — Fase 0/1 en construcción.
 > **Repo**: `github.com/Naired01/SAI` · **Imagen**: `ghcr.io/naired01/sai` · **i18n**: Español (default) + Inglés.
 
@@ -50,7 +50,7 @@ El equipo de TI necesita visibilidad y control sobre las máquinas que administr
 | # | Decisión | Elegido | Por qué |
 |---|---|---|---|
 | 1 | Relación con ZentinelMesh | **Proyecto nuevo e independiente** | SAI es marca propia; sin reuso de paquetes |
-| 2 | Stack backend + agente | **Go 1.22+** | Ecosistema maduro, cross-compile trivial win/linux/mac |
+| 2 | Stack backend + agente | **Go 1.25+** | Ecosistema maduro, cross-compile trivial win/linux/mac |
 | 3 | DB | **PostgreSQL 16** con `pgx` directo + migraciones embebidas (`embed.FS`) | Tipos ricos (UUID, JSONB, INET), particiones |
 | 4 | Auth agentes | **JWT por-agente** firmado por server, secret único en `agent_credentials` | Replay-resistant, revocable, sin certificados |
 | 5 | Conexión agente↔server | **WSS reverso** (agente inicia) | NAT/firewall transparente |
@@ -520,7 +520,7 @@ Páginas:
 
 ## 10. Docker
 
-Multi-stage: `node:22-alpine` (panel) → `golang:1.22-alpine` (server + agente) → `gcr.io/distroless/static-debian12`. Volumen opcional para `dist/` y datos.
+Multi-stage: `node:22-alpine` (panel) → `golang:1.25-alpine` (server + agente) → `gcr.io/distroless/static-debian12`. Volumen opcional para `dist/` y datos.
 
 `docker-compose.yml` con servicios `postgres` + `server`, red interna, healthchecks.
 

@@ -13,7 +13,7 @@ RUN npm run build
 # -----------------------------------------------------------------------------
 # Stage 2: build del server (Go) + cross-build del agente
 # -----------------------------------------------------------------------------
-FROM golang:1.22-alpine AS go
+FROM golang:1.25-alpine AS go
 RUN apk add --no-cache git make
 WORKDIR /src
 
