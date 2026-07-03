@@ -35,12 +35,29 @@ func main() {
 		adminEmail      = flag.String("admin-email", "", "Email del admin a crear/resetear en --bootstrap")
 		adminPassword   = flag.String("admin-password", "", "Password del admin a crear/resetear en --bootstrap")
 		showVersion     = flag.Bool("version", false, "Muestra la versión y sale")
+		healthcheck     = flag.Bool("healthcheck", false, "Probe HTTP al endpoint /api/v1/health y sale 0/1. Usado por Docker HEALTHCHECK.")
 	)
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println("sai-server", version.Version, "commit="+version.Commit, "built="+version.BuildTime)
 		return
+	}
+
+	if *healthcheck {
+		// El proceso principal ya está corriendo en otro PID; este solo sondea.
+		client := &http.Client{Timeout: 3 * time.Second}
+		resp, err := client.Get("http://127.0.0.1:8080/api/v1/health")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "healthcheck: probe failed:", err)
+			os.Exit(1)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			fmt.Fprintln(os.Stderr, "healthcheck: status", resp.StatusCode)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
 
 	logger := newLogger(os.Getenv("SAI_LOG_LEVEL"))
