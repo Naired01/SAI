@@ -566,7 +566,6 @@ Multi-stage: `node:22-alpine` (panel) → `golang:1.25-alpine` (server + agente)
 | **2** | ✅ | **Inventario HW** (Host + CPU + RAM + Discos + Redes): mensajes WS `inventory_request`/`inventory_snapshot`, paquete `internal/inventory`, 3 endpoints REST, ticker de purga, tabs Hardware en `AgentDetail` |
 | **2.1** | ✅ | **Inventario SW** (paquetes instalados + servicios + updates disponibles): collectors per-OS con build tags (dpkg/rpm/pacman/apt/yum en Linux; pkgutil+brew+launchctl+softwareupdate en macOS; winget/PS+SCM en Windows), bump SchemaVer 1→2, UI tab Software con sub-tabs y búsqueda |
 | 3 | ⏳ | Comandos reales (ejecutados por el agente) + JWT persistente por-agente |
-| 3 | ⏳ | Comandos reales (ejecutados por el agente) + JWT persistente por-agente |
 | 4 | ⏳ | Scheduled jobs + retry + dependencias |
 | 5 | ⏳ | Transferencia de archivos |
 | 6 | ⏳ | Terminal interactiva |
@@ -611,6 +610,44 @@ Infraestructura:
 - [x] 1.17 Dockerfile multi-stage (node:22-alpine → golang:1.25-alpine → distroless static) + docker-compose (postgres+server con healthchecks) + `.env.example`
 - [x] 1.18 `.github/workflows/ci.yml` (lint + test + build server + tsc + build web + artifacts) + `release.yml` (cross-build 6 targets agente + 2 targets server + installer + imagen multi-arch + GH Release + smoke job)
 - [x] 1.19 README quickstart final (dev + Docker + bootstrap env vs CLI explicados + instalación del agente por OS + troubleshooting)
+
+### Checklist Fase 2 — Inventario HW (cerrado jul-2026) — `b6178d0`
+
+Backend:
+- [x] 2.1 Migración `0003_inventory.sql`: tablas `agent_inventory` (UPSERT latest), `inventory_snapshots` (append-only), `inventory_events` (log de flujo)
+- [x] 2.2 Paquete `internal/inventory` con tipos versionados (`SchemaVer=1`) + `Collector` (gopsutil, timeout 8s) + storage (`UpsertLatest`, `Latest`, `History`, `StaleOrMissing`, `PurgeHistory`)
+- [x] 2.3 Servidor: bienvenida → `maybeRequestInventory` (server-push si stale), handler `MsgInventorySnap` con validación id-echo + persist + audit (`inventory.requested|received|failed`)
+- [x] 2.4 Agente: handler `inventory_request` → recolección → respuesta `inventory_snapshot` (mismo `id`)
+- [x] 2.5 Endpoints REST: `POST /agents/{id}/inventory/refresh` (rate-limit 30s por agente), `GET /agents/{id}/inventory`, `GET /agents/{id}/inventory/history?limit=&before=`
+- [x] 2.6 `LastInventoryAt` añadido al modelo `Agent` (visible en `last_seen`)
+- [x] 2.7 Tests puros en `internal/inventory/{collect,protocol}_test.go`
+
+Panel:
+- [x] 2.8 Tab **Hardware** en `AgentDetail` con `InventoryHardware.tsx` (Host + CPU + RAM + Discos + Redes), format helpers (`formatBytes`, `formatUptime`, `formatRelativeFromNow`)
+- [x] 2.9 Botón "Solicitar inventario" con toast y auto-refresh a 3s
+- [x] 2.10 i18n: 30+ claves nuevas (es + en)
+
+Smoketest:
+- [x] 2.11 Tests #15–17 añaden shape de endpoints (`/inventory/refresh`, `/inventory`, `/inventory/history`)
+
+### Checklist Fase 2.1 — Inventario SW (cerrado jul-2026) — `ef5fb40`
+
+Backend:
+- [x] 2.1.1 SchemaVer 1→2 (server acepta ambas versiones para back-compat)
+- [x] 2.1.2 Tipos estrictos: `Software{Packages, Services, Updates}` con `Source` por package-manager
+- [x] 2.1.3 Per-OS collectors con build tags:
+  - [x] Linux: dpkg → rpm → pacman (paquetes), systemd (servicios), apt → yum (updates)
+  - [x] macOS: pkgutil → brew (paquetes), launchctl (servicios), softwareupdate (updates)
+  - [x] Windows: winget → PowerShell `Get-Package` (paquetes), `sc query` (servicios)
+- [x] 2.1.4 `Sheller` interface para testabilidad; parsers puros y testeados cross-OS
+- [x] 2.1.5 Agente: `collectSoftwareWithTimeout(6s)` best-effort; sólo marca `Error` si encuentra algo parcial
+- [x] 2.1.6 Sin elevación
+
+Panel:
+- [x] 2.1.7 Tab **Software** en `AgentDetail` con `InventorySoftware.tsx`: 3 KPIs (packages/services/updates), sub-tabs, búsqueda y source filter
+
+Tests:
+- [x] 2.1.8 `internal/inventory/software_test.go` + `{linux,darwin,windows}_test.go` (parsers + cross-OS)
 
 ### Deuda técnica conocida — Fase 1 (a cerrar antes o durante Fase 2/3)
 

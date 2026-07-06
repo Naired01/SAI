@@ -1,6 +1,6 @@
 # SAI
 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/Naired01/SAI/releases)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/Naired01/SAI/releases)
 [![Go](https://img.shields.io/badge/go-1.25+-00ADD8.svg)](https://go.dev)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -77,7 +77,7 @@ Hay **dos mecanismos independientes** y no hacen lo mismo:
 > causa reinicios del container (este era el bug de "loop infinito" que se
 > daba cuando ambos caminos compartían la rama que hacía `exit` tras bootstrap).
 
-## Limitaciones conocidas (Fase 1 / Fase 2)
+## Limitaciones conocidas (Fase 3+)
 
 Estas son funcionalidades cuyo modelo y UI existen pero que aún no están
 operativas hasta fases posteriores. **No las reportes como bug** — el plan
@@ -89,6 +89,23 @@ las cerrará en versiones futuras.
 | Inventario de procesos / servicios en tiempo real | El inventario actual enumera servicios por su estado actual (running/stopped) en cada snapshot (cada 24h). Para ver procesos vivos en tiempo real hay que ir a Fase 3 (gestión de procesos) | **Fase 3** | Inventario = “estado en el momento de recolectar”; gestión = arranque/parada en vivo. |
 | Validación de JWT por-agente | El server emite `session_jwt` en el welcome, pero **no lo valida aún**: cada reconexión re-usa el enrollment token. El agent no persiste el JWT. | **Fase 3** | Firma con el secreto único de `agent_credentials` para revocación granular. |
 | Hash-chain de auditoría | La tabla `audit_events` ya tiene `prev_hash` y `hash` (migración 0002), pero `audit.Record` no las popula. | **Fase 10** | Hardening. |
+
+## Changelog
+
+### v0.2.0 (jul-2026) — Inventario HW + SW + deuda técnica Fase 1 cerrada
+
+**Nuevo:**
+- **Inventario HW** (Fase 2): paquete `internal/inventory`, mensajes WS `inventory_request`/`inventory_snapshot`, endpoints REST (`/agents/{id}/inventory{,/refresh,/history}`), tab **Hardware** en el panel con Host + CPU + RAM + Discos + Redes.
+- **Inventario SW** (Fase 2.1): paquetes instalados + servicios + updates disponibles. Collectors per-OS con build tags (Linux: dpkg/rpm/pacman/systemd/apt/yum; macOS: pkgutil/brew/launchctl/softwareupdate; Windows: winget/PS/`sc query`). SchemaVer 1→2 con back-compat. Tab **Software** con sub-tabs, búsqueda y source filter.
+- **Reconexión idempotente del agente**: una fila `agents` + un `agent_credentials` por `(token, host)`. Reusar fila y secret en reconexiones (era DT-1). Nueva acción de auditoría `agent.reconnect`.
+- **Single source of truth para "online"**: `agents.OnlineThreshold = 2m` consumido por `dashboard.ComputeCutoffs(now)` (era DT-2).
+- **Round 2 de tests unitarios**: `internal/ws/ws_test.go` (idempotencia de reconexión) + `internal/dashboard/dashboard_test.go` (invariantes de cutoffs). Cobertura total: `auth`, `tokens`, `agents`, `inventory`, `ws`, `dashboard`.
+
+**Sin cambios:** API REST, panel (excepto los 2 tabs nuevos), auth, bundles, smoketest.
+
+### v0.1.x (jun-2026)
+
+Fase 1 inicial: auth (argon2id + JWT + CSRF), enrollment tokens, WSS reverso, bundle ZIP 6-platform, grupos jerárquicos, plantillas de comando, jobs (modelo), auditoría, dashboard, i18n es/en, dark mode, Dockerfile multi-stage, GH Actions (CI + release).
 
 Para el detalle completo de la deuda técnica ver
 [`PLAN.md` §13-bis "Deuda técnica conocida — Fase 1"](PLAN.md).
