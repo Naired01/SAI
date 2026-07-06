@@ -24,9 +24,9 @@ const (
 )
 
 // OnlineThreshold es la ventana sin heartbeats a partir de la cual un agente se
-// considera offline. Single source of truth para `Agent.Online` y para los KPIs
-// del dashboard. Antes estaba duplicado como hardcoded `2 * time.Minute` y como
-// constante no usada `dashboard.ProblemThreshold = 5 * time.Minute`.
+// considera offline. Single source of truth para `Agent.Online`, los filtros
+// de `List(status=online|offline)` y los KPIs del dashboard. Si se cambia,
+// revisar también los tests de `agents_test.go` y `dashboard_test.go`.
 const OnlineThreshold = 2 * time.Minute
 
 // Agent representa un agente enrolado.

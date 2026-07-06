@@ -35,14 +35,34 @@ type KPIs struct {
 // hosts apagados hace meses aparezcan en el dashboard.
 const ProblemLookback = 30 * 24 * time.Hour
 
+// Cutoffs agrupa los timestamps que se aplican en las queries del dashboard:
+// "online" si last_seen_at > onlineCutoff; "problem" si last_seen_at está
+// entre onlineCutoff y problemCutoff. Calculados a partir de `now` y las
+// constantes de los paquetes agents/dashboard para mantener una sola
+// fuente de verdad. Testeable de forma pura en dashboard_test.go.
+type Cutoffs struct {
+	OnlineCutoff  time.Time
+	ProblemCutoff time.Time
+}
+
+// ComputeCutoffs devuelve los cutoffs para un instante dado. Extraído para
+// poder probar la lógica sin DB ni reloj global.
+func ComputeCutoffs(now time.Time) Cutoffs {
+	return Cutoffs{
+		OnlineCutoff:  now.Add(-agents.OnlineThreshold),
+		ProblemCutoff: now.Add(-ProblemLookback),
+	}
+}
+
 // Build compone el summary ejecutando las consultas en serie (son pocas
 // y rápidas; no se justifica paralelizar a este nivel).
 func Build(ctx context.Context, pool *pgxpool.Pool) (*Summary, error) {
 	s := &Summary{}
 
 	now := time.Now()
-	onlineCutoff := now.Add(-agents.OnlineThreshold)
-	problemCutoff := now.Add(-ProblemLookback)
+	cuts := ComputeCutoffs(now)
+	onlineCutoff := cuts.OnlineCutoff
+	problemCutoff := cuts.ProblemCutoff
 
 	// KPIs
 	if err := pool.QueryRow(ctx, `

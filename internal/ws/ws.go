@@ -453,12 +453,56 @@ func derefSoftware(s *inventory.Software) inventory.Software {
 // y, si no lo encuentra, lo crea. Devuelve reconnect=true cuando se reutilizó
 // (segundo o enésimo hello del mismo host con el mismo token).
 func findOrCreateAgent(ctx context.Context, opts HandlerOptions, enrID string, hello HelloMsg) (*agents.Agent, string, bool, error) {
-	if existing, secret, err := agents.FindByEnrollmentAndHost(ctx, opts.Pool, enrID, hello.Hostname); err == nil {
+	return findOrCreateAgentWith(ctx, &agentsRepoFromPool{pool: opts.Pool}, enrID, hello)
+}
+
+// agentFinder / agentCreator son las dependencias mínimas que
+// findOrCreateAgentWith necesita. Se extraen a interfaces para poder testear
+// la decisión pura (lookup → reuse | create) sin tocar la DB: en los tests
+// pasamos fakes que devuelven lo que queremos.
+type agentFinder interface {
+	FindByEnrollmentAndHost(ctx context.Context, enrID, hostname string) (*agents.Agent, string, error)
+}
+type agentCreator interface {
+	CreateAgent(ctx context.Context, enrID, hostname, osName, osVersion, arch, agentVersion string, labels map[string]any) (*agents.Agent, string, error)
+}
+
+type repoPool interface {
+	agentFinder
+	agentCreator
+}
+
+// agentsRepoFromPool adapta *pgxpool.Pool a las interfaces agentFinder /
+// agentCreator delegando a las funciones del paquete agents. En producción
+// findOrCreateAgent lo construye; en los tests inyectamos un fake que
+// implementa repoPool.
+type agentsRepoFromPool struct {
+	pool *pgxpool.Pool
+}
+
+func (r *agentsRepoFromPool) FindByEnrollmentAndHost(ctx context.Context, enrID, hostname string) (*agents.Agent, string, error) {
+	return agents.FindByEnrollmentAndHost(ctx, r.pool, enrID, hostname)
+}
+func (r *agentsRepoFromPool) CreateAgent(ctx context.Context, enrID, hostname, osName, osVersion, arch, agentVersion string, labels map[string]any) (*agents.Agent, string, error) {
+	return agents.Create(ctx, r.pool, enrID, hostname, osName, osVersion, arch, agentVersion, labels)
+}
+
+// findOrCreateAgentWith es la implementación testeable: separa lookup y
+// create para poder inyectar fakes. Devuelve (agent, secret, reconnect, err).
+// Reglas:
+//   - lookup OK (sin error) → reuse fila + secret, reconnect=true
+//   - lookup ErrNotFound    → create, reconnect=false
+//   - lookup otro error     → propagar
+//   - create error          → propagar
+func findOrCreateAgentWith(ctx context.Context, repo repoPool, enrID string, hello HelloMsg) (*agents.Agent, string, bool, error) {
+	existing, secret, err := repo.FindByEnrollmentAndHost(ctx, enrID, hello.Hostname)
+	if err == nil {
 		return existing, secret, true, nil
-	} else if !errors.Is(err, agents.ErrNotFound) {
+	}
+	if !errors.Is(err, agents.ErrNotFound) {
 		return nil, "", false, err
 	}
-	a, secret, err := agents.Create(ctx, opts.Pool, enrID,
+	a, secret, err := repo.CreateAgent(ctx, enrID,
 		hello.Hostname, hello.OS, hello.OSVersion, hello.Arch, hello.AgentVersion, hello.Labels)
 	if err != nil {
 		return nil, "", false, err
