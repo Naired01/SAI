@@ -24,26 +24,30 @@ import (
 
 // Server agrupa las dependencias para los handlers.
 type Server struct {
-	Pool           *pgxpool.Pool
-	BundleDir      string
-	PublicURL      string
-	WebDist        string
-	Bundle         *i18n.Bundle
-	Hub            WSHubs
-	JWTSecret      string
-	AgentJWTSecret string
-	Logger         *slog.Logger
-	StartTime      time.Time
+	Pool            *pgxpool.Pool
+	BundleDir       string
+	PublicURL       string
+	WebDist         string
+	Bundle          *i18n.Bundle
+	Hub             WSHubs
+	JWTSecret       string
+	AgentJWTSecret  string
+	Logger          *slog.Logger
+	StartTime       time.Time
+	refreshLimiter  *inventoryRateLimiter
 }
 
-// WSHubs define lo que el handler /api/v1/agents/download necesita del hub
-// (placeholder mientras creamos la dependencia real).
+// WSHubs define lo que los handlers del panel necesitan del hub WS.
 type WSHubs interface {
 	IsConnected(agentID string) bool
+	SendTo(agentID string, msg any) bool
 }
 
 // NewRouter construye el chi.Mux completo.
 func NewRouter(s *Server) http.Handler {
+	if s.refreshLimiter == nil {
+		s.refreshLimiter = newInventoryRateLimiter()
+	}
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -86,6 +90,10 @@ func NewRouter(s *Server) http.Handler {
 			r.Patch("/{id}", s.handleAgentsUpdate)
 			r.Delete("/{id}", s.handleAgentsDelete)
 			r.Get("/{id}/events", s.handleAgentsEvents)
+			// Phase 2 — inventory
+			r.Post("/{id}/inventory/refresh", s.handleInventoryRefresh)
+			r.Get("/{id}/inventory", s.handleInventoryLatest)
+			r.Get("/{id}/inventory/history", s.handleInventoryHistory)
 		})
 
 		r.Route("/groups", func(r chi.Router) {

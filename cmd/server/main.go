@@ -22,6 +22,7 @@ import (
 	"github.com/Naired01/SAI/internal/config"
 	"github.com/Naired01/SAI/internal/db"
 	"github.com/Naired01/SAI/internal/i18n"
+	"github.com/Naired01/SAI/internal/inventory"
 	"github.com/Naired01/SAI/internal/templates"
 	"github.com/Naired01/SAI/internal/version"
 	"github.com/Naired01/SAI/internal/ws"
@@ -296,6 +297,26 @@ func main() {
 		}
 	}()
 	logger.Info("startup ok", "step", "12/bg_purger")
+
+	// STEP 12b: Inventory snapshot purger (Fase 2). Mantiene las últimas
+	// N snapshots por agente (N = inventory.MaxSnapshotsPerAgent). Corre
+	// cada hora en paralelo con el purger de sesiones.
+	logger.Info("startup step", "step", "12b/inventory_purger", "msg", "starting inventory snapshot purger")
+	go func() {
+		t := time.NewTicker(1 * time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if n, err := inventory.PurgeHistory(context.Background(), pool.Pool, inventory.MaxSnapshotsPerAgent); err == nil && n > 0 {
+					logger.Info("purged inventory snapshots", "count", n, "keep", inventory.MaxSnapshotsPerAgent)
+				}
+			}
+		}
+	}()
+	logger.Info("startup ok", "step", "12b/inventory_purger")
 
 	// STEP 13: Listen (TCP bind + serve)
 	logger.Info("startup step", "step", "13/listen", "msg", "binding tcp and starting serve", "addr", cfg.Bind)

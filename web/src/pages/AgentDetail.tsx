@@ -1,8 +1,18 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { get, type Agent, type AuditEvent } from '../lib/api'
+import { RefreshCw } from 'lucide-react'
+import {
+  get,
+  refreshInventory,
+  getInventory,
+  type Agent,
+  type AuditEvent,
+  type InventorySnapshot,
+} from '../lib/api'
+import { InventoryHardware } from '../components/InventoryHardware'
+import { formatRelativeFromNow } from '../lib/format'
 
 const TABS = ['info', 'hardware', 'software', 'commands', 'terminal', 'events', 'audit'] as const
 type Tab = typeof TABS[number]
@@ -10,6 +20,7 @@ type Tab = typeof TABS[number]
 export function AgentDetail() {
   const { id } = useParams<{ id: string }>()
   const { t } = useTranslation()
+  const qc = useQueryClient()
   const [tab, setTab] = useState<Tab>('info')
 
   const { data: agent, isLoading } = useQuery({
@@ -31,14 +42,53 @@ export function AgentDetail() {
     enabled: !!id && tab === 'audit',
   })
 
+  const { data: inventory, isFetching: inventoryLoading, error: inventoryError } = useQuery({
+    queryKey: ['inventory', id],
+    queryFn: () => getInventory(id!),
+    enabled: !!id && tab === 'hardware',
+    retry: false,
+  })
+
+  const refreshMut = useMutation({
+    mutationFn: () => refreshInventory(id!),
+    onSuccess: () => {
+      // Refetch inventory tras 3s para darle tiempo al agente de responder.
+      setTimeout(() => {
+        qc.invalidateQueries({ queryKey: ['inventory', id] })
+        qc.invalidateQueries({ queryKey: ['agent', id] })
+      }, 3000)
+    },
+  })
+
   if (isLoading) return <div className="text-slate-500 dark:text-slate-400">{t('common.loading')}</div>
   if (!agent) return <div className="text-slate-500 dark:text-slate-400">{t('common.empty')}</div>
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <h1 className="text-2xl font-semibold">{agent.hostname}</h1>
         <span className="text-xs text-slate-500 dark:text-slate-400">{agent.os} {agent.arch}</span>
+        {(agent as any).last_inventory_at && (
+          <span className="text-xs text-slate-500 dark:text-slate-400">
+            {t('inventory.last')}: {formatRelativeFromNow((agent as any).last_inventory_at)}
+          </span>
+        )}
+        <button
+          onClick={() => refreshMut.mutate()}
+          disabled={refreshMut.isPending}
+          className="ml-auto inline-flex items-center gap-1 px-3 py-1 text-sm rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50"
+          title={t('inventory.refresh.title')}
+        >
+          <RefreshCw size={14} className={refreshMut.isPending ? 'animate-spin' : ''} />
+          {t('inventory.refresh.button')}
+        </button>
+        {refreshMut.data && (
+          <span className={`text-xs ${refreshMut.data.delivered ? 'text-emerald-600' : 'text-amber-600'}`}>
+            {refreshMut.data.delivered
+              ? t('inventory.refresh.sent')
+              : t('inventory.refresh.queued')}
+          </span>
+        )}
       </div>
 
       {/* Tabs */}
@@ -59,8 +109,19 @@ export function AgentDetail() {
       </div>
 
       {tab === 'info' && <InfoTab agent={agent} />}
-      {tab === 'hardware' && <ComingSoon feature={t('agents.detail.hardware')} />}
-      {tab === 'software' && <ComingSoon feature={t('agents.detail.software')} />}
+      {tab === 'hardware' && (
+        <HardwareTab
+          inventory={inventory}
+          loading={inventoryLoading}
+          error={inventoryError}
+        />
+      )}
+      {tab === 'software' && (
+        <div className="card p-8 text-center text-slate-500 dark:text-slate-400">
+          <div className="text-base font-medium">{t('agents.detail.software')}</div>
+          <div className="text-sm mt-1">{t('inventory.software.phase_2_1')}</div>
+        </div>
+      )}
       {tab === 'commands' && <ComingSoon feature={t('agents.detail.commands')} />}
       {tab === 'terminal' && <ComingSoon feature={t('agents.detail.terminal')} />}
       {tab === 'events' && (
@@ -119,6 +180,40 @@ function Field({ label, value }: { label: string; value: string }) {
       <div className="text-xs text-slate-500 dark:text-slate-400">{label}</div>
       <div className="text-sm font-medium break-words">{value}</div>
     </div>
+  )
+}
+
+function HardwareTab({
+  inventory,
+  loading,
+  error,
+}: {
+  inventory: InventorySnapshot | undefined
+  loading: boolean
+  error: unknown
+}) {
+  const { t } = useTranslation()
+  if (loading) {
+    return <div className="card p-4 text-slate-500 dark:text-slate-400">{t('common.loading')}</div>
+  }
+  if (error || !inventory) {
+    return (
+      <div className="card p-8 text-center space-y-3">
+        <div className="text-slate-500 dark:text-slate-400 text-sm">
+          {t('inventory.empty.title')}
+        </div>
+        <div className="text-slate-400 dark:text-slate-500 text-xs">
+          {t('inventory.empty.hint')}
+        </div>
+      </div>
+    )
+  }
+  return (
+    <InventoryHardware
+      hardware={inventory.hardware}
+      collectedAt={inventory.received_at}
+      agentVersion={inventory.agent_version}
+    />
   )
 }
 

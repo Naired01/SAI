@@ -52,6 +52,9 @@ const (
 	ActionJobCreate           = "job.create"
 	ActionJobCancel           = "job.cancel"
 	ActionSystemBootstrap     = "system.bootstrap_admin"
+	ActionInventoryRequested  = "inventory.requested" // admin pidió refresh o server-push
+	ActionInventoryReceived   = "inventory.received"  // snapshot persistido
+	ActionInventoryFailed     = "inventory.failed"    // timeout o collector error
 )
 
 // Actor identifica quién ejecuta la acción.

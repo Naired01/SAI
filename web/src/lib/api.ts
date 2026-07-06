@@ -195,3 +195,85 @@ export type DashboardSummary = {
 }
 
 export type Me = { id: string; email: string; role: string }
+
+// Phase 2 — inventory types ---------------------------------------
+
+export type Host = {
+  hostname: string
+  os: string
+  platform: string
+  kernel_arch: string
+  kernel_ver?: string
+  uptime_secs: number
+  boot_time?: string
+}
+
+export type CPUSlot = {
+  model_name: string
+  vendor?: string
+  family?: string
+  model?: string
+  cores: number
+  mhz: number
+}
+
+export type MemoryInfo = {
+  total_bytes: number
+  available_bytes: number
+  used_bytes: number
+}
+
+export type Disk = {
+  device: string
+  mountpoint: string
+  fs_type: string
+  total_bytes: number
+  used_bytes: number
+  label?: string
+}
+
+export type NetIface = {
+  name: string
+  hardware_addr?: string
+  mtu?: number
+  flags?: string
+  addrs?: string[]
+  state?: string
+}
+
+export type InventoryHardware = {
+  host: Host
+  cpu: CPUSlot[]
+  memory: MemoryInfo
+  disks: Disk[]
+  network: NetIface[]
+}
+
+export type InventorySnapshot = {
+  agent_id: string
+  received_at: string
+  source: string
+  hardware: InventoryHardware
+  software: Record<string, unknown>
+  agent_version: string
+  schema_ver: number
+}
+
+export type InventoryRefreshResponse = {
+  agent_id: string
+  request_id: string
+  delivered: boolean
+  stale: boolean
+}
+
+export async function getInventory(agentId: string): Promise<InventorySnapshot> {
+  return get<InventorySnapshot>(`/api/v1/agents/${agentId}/inventory`)
+}
+
+export async function getInventoryHistory(agentId: string): Promise<{ items: InventorySnapshot[] }> {
+  return get<{ items: InventorySnapshot[] }>(`/api/v1/agents/${agentId}/inventory/history?limit=20`)
+}
+
+export async function refreshInventory(agentId: string): Promise<InventoryRefreshResponse> {
+  return post<InventoryRefreshResponse>(`/api/v1/agents/${agentId}/inventory/refresh`)
+}

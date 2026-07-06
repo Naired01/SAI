@@ -31,21 +31,22 @@ const OnlineThreshold = 2 * time.Minute
 
 // Agent representa un agente enrolado.
 type Agent struct {
-	ID            string         `json:"id"`
-	Hostname      string         `json:"hostname"`
-	OS            string         `json:"os"`
-	OSVersion     string         `json:"os_version,omitempty"`
-	Arch          string         `json:"arch,omitempty"`
-	AgentVersion  string         `json:"agent_version,omitempty"`
-	EnrollmentID  *string        `json:"enrollment_id,omitempty"`
-	Labels        map[string]any `json:"labels"`
-	Visibility    string         `json:"visibility"`
-	LastSeenAt    *time.Time     `json:"last_seen_at,omitempty"`
-	FirstSeenAt   time.Time      `json:"first_seen_at"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	GroupIDs      []string       `json:"group_ids"`
-	Online        bool           `json:"online"`
+	ID              string         `json:"id"`
+	Hostname        string         `json:"hostname"`
+	OS              string         `json:"os"`
+	OSVersion       string         `json:"os_version,omitempty"`
+	Arch            string         `json:"arch,omitempty"`
+	AgentVersion    string         `json:"agent_version,omitempty"`
+	EnrollmentID    *string        `json:"enrollment_id,omitempty"`
+	Labels          map[string]any `json:"labels"`
+	Visibility      string         `json:"visibility"`
+	LastSeenAt      *time.Time     `json:"last_seen_at,omitempty"`
+	FirstSeenAt     time.Time      `json:"first_seen_at"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	GroupIDs        []string       `json:"group_ids"`
+	Online          bool           `json:"online"`
+	LastInventoryAt *time.Time     `json:"last_inventory_at,omitempty"`
 }
 
 // Create registra un agente nuevo a partir de un handshake de enrolamiento
@@ -358,7 +359,8 @@ const agentSelect = `
 	SELECT a.id, a.hostname, a.os, COALESCE(a.os_version,''), COALESCE(a.arch,''),
 	       COALESCE(a.agent_version,''), a.enrollment_id, a.labels, a.visibility,
 	       a.last_seen_at, a.first_seen_at, a.created_at, a.updated_at,
-	       COALESCE((SELECT array_agg(group_id) FROM agent_group_members WHERE agent_id = a.id), '{}')
+	       COALESCE((SELECT array_agg(group_id) FROM agent_group_members WHERE agent_id = a.id), '{}'),
+	       (SELECT MAX(received_at) FROM agent_inventory WHERE agent_id = a.id)
 	FROM agents a
 `
 
@@ -373,10 +375,12 @@ func scanAgent(r rowScanner) (*Agent, error) {
 		labelsRaw    []byte
 		enrollmentID *string
 		lastSeen     *time.Time
+		lastInv      *time.Time
 	)
 	if err := r.Scan(&a.ID, &a.Hostname, &a.OS, &a.OSVersion, &a.Arch,
 		&a.AgentVersion, &enrollmentID, &labelsRaw, &a.Visibility,
-		&lastSeen, &a.FirstSeenAt, &a.CreatedAt, &a.UpdatedAt, &groupIDs); err != nil {
+		&lastSeen, &a.FirstSeenAt, &a.CreatedAt, &a.UpdatedAt, &groupIDs,
+		&lastInv); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -384,6 +388,7 @@ func scanAgent(r rowScanner) (*Agent, error) {
 	}
 	a.EnrollmentID = enrollmentID
 	a.LastSeenAt = lastSeen
+	a.LastInventoryAt = lastInv
 	a.Online = lastSeen != nil && time.Since(*lastSeen) < OnlineThreshold
 	a.GroupIDs = groupIDs
 	if len(labelsRaw) > 0 {

@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Naired01/SAI/internal/inventory"
 	"github.com/Naired01/SAI/internal/version"
 	"github.com/gorilla/websocket"
 )
@@ -170,9 +171,70 @@ func runOnce(ctx context.Context, logger *slog.Logger, cfg *Config, hostname str
 				}
 				return err
 			}
-			logger.Debug("server msg", "raw", string(raw))
+			handleServerMessage(ctx, logger, conn, raw)
 		}
 	}
+}
+
+// handleServerMessage despacha por tipo. Hoy: inventory_request (Fase 2).
+// Otros tipos se loggean en debug. Esta función nunca retorna error: si falla,
+// loggea y continúa; la conexión sigue siendo utilizable para heartbeats.
+func handleServerMessage(ctx context.Context, logger *slog.Logger, conn *websocket.Conn, raw []byte) {
+	var hdr struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &hdr); err != nil {
+		logger.Debug("server msg: bad json", "raw", string(raw))
+		return
+	}
+	switch hdr.Type {
+	case "inventory_request":
+		handleInventoryRequest(ctx, logger, conn, hdr.ID)
+	default:
+		logger.Debug("server msg (unhandled)", "type", hdr.Type)
+	}
+}
+
+// handleInventoryRequest recolecta el inventario HW del equipo y responde
+// con un inventory_snapshot. El collectedAt lleva la hora del agente, no la
+// del server, para que la UI pueda mostrar "Recolectado el..." coherente con
+// la captura real.
+func handleInventoryRequest(ctx context.Context, logger *slog.Logger, conn *websocket.Conn, reqID string) {
+	if reqID == "" {
+		logger.Warn("inventory_request sin id; se ignora")
+		return
+	}
+	collectCtx, cancel := context.WithTimeout(ctx, inventory.CollectTimeout)
+	defer cancel()
+
+	start := time.Now()
+	snap := inventory.Collect(collectCtx, version.Version)
+	// Collect nunca retorna error; los problemas parciales van al campo Error.
+	dur := time.Since(start)
+
+	hw := snap.Hardware
+	sw := snap.Software
+	resp := inventory.SnapshotMsg{
+		Type:         "inventory_snapshot",
+		ID:           reqID,
+		SchemaVer:    inventory.SchemaVer,
+		AgentVersion: version.Version,
+		Hardware:     &hw,
+		Software:     &sw,
+		Error:        snap.Error,
+		CollectedAt:  snap.CollectedAt,
+	}
+	if err := conn.WriteJSON(resp); err != nil {
+		logger.Error("write inventory_snapshot", "err", err)
+		return
+	}
+	logger.Info("inventory_snapshot sent",
+		"request_id", reqID,
+		"agent_version", version.Version,
+		"duration_ms", dur.Milliseconds(),
+		"has_error", snap.Error != "",
+	)
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -188,6 +250,8 @@ func loadConfig(path string) (*Config, error) {
 }
 
 func runtimeOSVersion() string {
-	// Por ahora no parseamos versiones específicas; Fase 2 usa gopsutil.
+	// Para versiones específicas del OS usamos gopsutil desde Fase 2;
+	// aquí devolvemos un placeholder corto. Inventory lo sobreescribe
+	// cuando esté disponible con información real del kernel.
 	return runtime.GOOS + "/" + runtime.GOARCH
 }

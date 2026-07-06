@@ -8,6 +8,10 @@
 //  6. POST /api/v1/tokens     (crea enrollment token con CSRF)
 //  7. /api/v1/audit/events
 //  8. POST /api/v1/auth/logout
+//  9. /api/v1/inventory endpoints (Fase 2) — verifican shape de respuesta,
+//     404 si no hay inventario y 405/422 para id inválido. NO requiere un
+//     agente real conectado; el flujo completo se valida en
+//     scripts/verify-docker.sh + un agente local.
 //
 // Uso:
 //
@@ -230,6 +234,31 @@ func main() {
 	fmt.Println("[14] /api/v1/auth/me después de logout (debe ser 401)")
 	r = get("/api/v1/auth/me")
 	check("auth/me post-logout", r.status, 401, r.body)
+
+	// 15-17. Fase 2: endpoints de inventario. Como no hay agentes enrolados
+	// durante el smoketest, los GET deben devolver 404. El POST refresh
+	// devuelve 400 con UUID inválido. Verificamos el shape de respuesta del
+	// panel y la consistencia del contrato HTTP.
+	fmt.Println("[15] GET /api/v1/agents/{no-agent}/inventory (404 esperado)")
+	r = get("/api/v1/agents/00000000-0000-0000-0000-000000000000/inventory")
+	check("inventory latest con agente inexistente", r.status, 404, r.body)
+
+	fmt.Println("[16] GET /api/v1/agents/{no-agent}/inventory/history (200 con items=[])")
+	r = get("/api/v1/agents/00000000-0000-0000-0000-000000000000/inventory/history?limit=10")
+	check("inventory history con agente inexistente", r.status, 200, r.body)
+	if r.status == 200 {
+		var h struct {
+			Items []map[string]any `json:"items"`
+		}
+		_ = json.Unmarshal(r.body, &h)
+		if len(h.Items) != 0 {
+			fmt.Printf("         aviso: esperado items=[] cuando el agente no existe, got %d\n", len(h.Items))
+		}
+	}
+
+	fmt.Println("[17] POST /api/v1/agents/{no}/inventory/refresh (400 id inválido)")
+	r = post("/api/v1/agents/no-valid-uuid/inventory/refresh", nil)
+	check("inventory refresh con id inválido", r.status, 400, r.body)
 
 	// 15-17. Descarga de bundle ZIP para los 3 OS principales
 	fmt.Println()

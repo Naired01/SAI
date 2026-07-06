@@ -14,7 +14,9 @@ import (
 
 	"github.com/Naired01/SAI/internal/agents"
 	"github.com/Naired01/SAI/internal/audit"
+	"github.com/Naired01/SAI/internal/inventory"
 	"github.com/Naired01/SAI/internal/tokens"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -260,6 +262,11 @@ func serveAgent(ctx context.Context, opts HandlerOptions, conn *websocket.Conn) 
 	_ = agents.RecordEvent(ctx, opts.Pool, agent.ID, "connect", map[string]any{"at": time.Now()})
 	_ = agents.Touch(ctx, opts.Pool, agent.ID, time.Now())
 
+	// 5b) Fase 2 — server-push de inventory_request si el último snapshot es
+	// stale o no existe. Fire & forget; el agente responde con inventory_snapshot
+	// que entra por readerLoop → handleInventorySnapshot. No bloqueamos el welcome.
+	go maybeRequestInventory(ctx, opts, agent.ID)
+
 	// 6) Loop principal
 	conn.SetReadDeadline(time.Time{}) // sin timeout para heartbeats
 	done := make(chan struct{})
@@ -299,9 +306,11 @@ func readerLoop(ctx context.Context, opts HandlerOptions, conn *websocket.Conn, 
 			// latency check; no-op por ahora
 		case MsgError:
 			_ = agents.RecordEvent(ctx, opts.Pool, agentID, "agent_error", map[string]any{"raw": string(raw)})
-		case MsgCommandResult, MsgInventorySnap:
-			// Llegarán en Fase 3 / 2; por ahora solo loggeamos.
-			opts.Logger.Debug("phase-1 message received", "type", msg.Type, "agent", agentID)
+		case MsgCommandResult:
+			// Llegará en Fase 3; por ahora solo loggeamos.
+			opts.Logger.Debug("phase-3 message received", "type", msg.Type, "agent", agentID)
+		case MsgInventorySnap:
+			handleInventorySnapshot(ctx, opts, agentID, raw)
 		}
 	}
 }
@@ -337,8 +346,108 @@ func sendError(conn *websocket.Conn, code, msg string) {
 }
 
 // -----------------------------------------------------------------------------
-// Agent JWT (placeholder — Fase 3 lo formaliza)
+// Inventory helpers (Fase 2)
 // -----------------------------------------------------------------------------
+
+// maybeRequestInventory envía un inventory_request al agente si su último
+// snapshot es stale o no existe. Fire & forget: si el agente ya no está
+// conectado al momento de enviar, Hub.SendTo devuelve false y se descarta.
+func maybeRequestInventory(ctx context.Context, opts HandlerOptions, agentID string) {
+	stale, err := inventory.StaleOrMissing(ctx, opts.Pool, agentID, inventory.DefaultTTL)
+	if err != nil {
+		opts.Logger.Warn("inventory stale check failed", "agent", agentID, "err", err)
+		return
+	}
+	if !stale {
+		return
+	}
+	reqID := uuid.New().String()
+	req := inventory.ReqMsg{Type: MsgInventoryReq, ID: reqID, Include: []string{"hardware"}}
+	if !opts.Hub.SendTo(agentID, req) {
+		opts.Logger.Debug("inventory_request dropped (agent not connected)", "agent", agentID)
+		return
+	}
+	_ = inventory.RecordEvent(ctx, opts.Pool, agentID, "requested", uuid.MustParse(reqID), "", "")
+	audit.Record(ctx, opts.Pool, audit.Event{
+		Actor:  audit.Actor{Type: "system", Label: "server"},
+		Action: audit.ActionInventoryRequested,
+		Target: &audit.Target{Type: "agent", ID: &agentID, Label: agentID},
+		Metadata: map[string]any{
+			"reason":     "stale_or_missing",
+			"request_id": reqID,
+		},
+	})
+	opts.Logger.Info("inventory_request sent", "agent", agentID, "request_id", reqID)
+}
+
+// handleInventorySnapshot valida y persiste el snapshot recibido.
+// Errores se loggean pero no se devuelven al agente (la conexión ya está
+// abierta para heartbeats; no queremos cerrarla).
+func handleInventorySnapshot(ctx context.Context, opts HandlerOptions, agentID string, raw []byte) {
+	var msg inventory.SnapshotMsg
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		opts.Logger.Warn("inventory_snapshot bad json", "agent", agentID, "err", err)
+		_ = inventory.RecordEvent(ctx, opts.Pool, agentID, "failed", uuid.Nil, "", "bad_json")
+		return
+	}
+	if err := msg.Validate(); err != nil {
+		opts.Logger.Warn("inventory_snapshot invalid", "agent", agentID, "err", err)
+		_ = inventory.RecordEvent(ctx, opts.Pool, agentID, "failed", uuid.Nil, msg.AgentVersion, err.Error())
+		audit.Record(ctx, opts.Pool, audit.Event{
+			Actor:   audit.Actor{Type: "agent", ID: &agentID, Label: agentID},
+			Action:  audit.ActionInventoryFailed,
+			Target:  &audit.Target{Type: "agent", ID: &agentID, Label: agentID},
+			Metadata: map[string]any{"reason": err.Error(), "id": msg.ID},
+		})
+		return
+	}
+	snap := inventory.Snapshot{
+		SchemaVer:    msg.SchemaVer,
+		AgentVersion: msg.AgentVersion,
+		Hardware:     *msg.Hardware,
+		Software:     derefSoftware(msg.Software),
+		Error:        msg.Error,
+		CollectedAt:  msg.CollectedAt,
+	}
+	if snap.CollectedAt.IsZero() {
+		snap.CollectedAt = time.Now().UTC()
+	}
+	if err := inventory.UpsertLatest(ctx, opts.Pool, agentID, snap); err != nil {
+		opts.Logger.Error("inventory upsert failed", "agent", agentID, "err", err)
+		_ = inventory.RecordEvent(ctx, opts.Pool, agentID, "failed", uuid.Nil, snap.AgentVersion, err.Error())
+		audit.Record(ctx, opts.Pool, audit.Event{
+			Actor:   audit.Actor{Type: "agent", ID: &agentID, Label: agentID},
+			Action:  audit.ActionInventoryFailed,
+			Target:  &audit.Target{Type: "agent", ID: &agentID, Label: agentID},
+			Metadata: map[string]any{"reason": err.Error(), "id": msg.ID},
+		})
+		return
+	}
+	opts.Logger.Info("inventory stored",
+		"agent", agentID,
+		"request_id", msg.ID,
+		"agent_version", msg.AgentVersion,
+		"hw_host", msg.Hardware.Host.Hostname,
+	)
+	audit.Record(ctx, opts.Pool, audit.Event{
+		Actor:   audit.Actor{Type: "agent", ID: &agentID, Label: agentID},
+		Action:  audit.ActionInventoryReceived,
+		Target:  &audit.Target{Type: "agent", ID: &agentID, Label: agentID},
+		Metadata: map[string]any{
+			"request_id": msg.ID,
+			"agent_version": msg.AgentVersion,
+			"has_error": msg.Error != "",
+		},
+	})
+}
+
+func derefSoftware(s *inventory.Software) inventory.Software {
+	if s == nil {
+		return inventory.Software{}
+	}
+	return *s
+}
+
 
 // findOrCreateAgent busca el agente existente para (enrollment_id, hostname)
 // y, si no lo encuentra, lo crea. Devuelve reconnect=true cuando se reutilizó

@@ -77,7 +77,7 @@ Hay **dos mecanismos independientes** y no hacen lo mismo:
 > causa reinicios del container (este era el bug de "loop infinito" que se
 > daba cuando ambos caminos compartían la rama que hacía `exit` tras bootstrap).
 
-## Limitaciones conocidas (Fase 1)
+## Limitaciones conocidas (Fase 1 / Fase 2)
 
 Estas son funcionalidades cuyo modelo y UI existen pero que aún no están
 operativas hasta fases posteriores. **No las reportes como bug** — el plan
@@ -86,7 +86,7 @@ las cerrará en versiones futuras.
 | Limitación | Estado | Cuando se cierra | Detalle |
 |---|---|---|---|
 | Ejecución real de comandos | Los jobs se crean y aparecen en la UI (`/jobs`) pero los items quedan en `pending` | **Fase 3** | Llegará con los mensajes WS `command` / `command_result` y el dispatcher real sobre el mismo hub. El panel ya muestra el aviso `jobs.phase_notice`. |
-| Inventario HW/SW | Las tabs `Hardware` y `Software` en `AgentDetail` muestran "Disponible en una fase posterior" | **Fase 2** | Mensajes WS `inventory_request` / `inventory_snapshot` + storage + UI. |
+| Inventario de software (paquetes instalados) | La tab `Software` en `AgentDetail` muestra "Disponible en Fase 2.1"; sólo Hardware se recolecta. | **Fase 2.1** | Mensajes WS extendidos + enumeración por SO (dpkg/rpm/pacman/winget/choco). Hardware ya está cubierto desde v0.2.0. |
 | Validación de JWT por-agente | El server emite `session_jwt` en el welcome, pero **no lo valida aún**: cada reconexión re-usa el enrollment token. El agent no persiste el JWT. | **Fase 3** | Firma con el secreto único de `agent_credentials` para revocación granular. |
 | Hash-chain de auditoría | La tabla `audit_events` ya tiene `prev_hash` y `hash` (migración 0002), pero `audit.Record` no las popula. | **Fase 10** | Hardening. |
 

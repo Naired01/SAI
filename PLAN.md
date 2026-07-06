@@ -563,7 +563,8 @@ Multi-stage: `node:22-alpine` (panel) → `golang:1.25-alpine` (server + agente)
 |---|---|---|
 | **0** | ✅ | Andamiaje repo, go.mod, estructura, docker-compose skeleton |
 | **1** | ✅ | Auth, tokens, agents, **grupos**, **templates**, **jobs (modelo)**, **audit (tabla+UI)**, **dashboard**, ws hub, bundle, panel básico, i18n, GH Actions (release.yml) |
-| 2 | ⏳ | Inventario HW/SW |
+| **2** | ✅ | **Inventario HW** (Host + CPU + RAM + Discos + Redes): mensajes WS `inventory_request`/`inventory_snapshot`, paquete `internal/inventory`, 3 endpoints REST, ticker de purga, tabs Hardware en `AgentDetail` |
+| 2.1 | ⏳ | Inventario de software (paquetes instalados, actualizaciones del SO) |
 | 3 | ⏳ | Comandos reales (ejecutados por el agente) + JWT persistente por-agente |
 | 4 | ⏳ | Scheduled jobs + retry + dependencias |
 | 5 | ⏳ | Transferencia de archivos |
@@ -635,6 +636,7 @@ Infraestructura:
 
 ## 15. Changelog del plan
 
+- **v1.3** (jul-2026): **Fase 2 — Inventario HW**. Migración `0003_inventory.sql` con `agent_inventory` (UPSERT latest) + `inventory_snapshots` (append-only historial) + `inventory_events` (log de flujo). Nuevo paquete `internal/inventory` con tipos versionados (SchemaVer=1), collector gopsutil (`Collect(ctx, agentVersion)` con timeout 8s), storage atómico (`UpsertLatest`), `Latest`, `History`, `StaleOrMissing`, `PurgeHistory`. Servidor: bienvenida → `maybeRequestInventory` (server-push si stale), handler `MsgInventorySnap` con validación id-echo + persist + audit. Agente: handler `inventory_request` que recolecta y responde con `inventory_snapshot` (mismo `id`). Endpoints: `POST /agents/{id}/inventory/refresh` (rate-limit 30s por agente), `GET /agents/{id}/inventory` (latest), `GET /agents/{id}/inventory/history?limit=&before=`. Constantes de auditoría: `inventory.requested|received|failed`. `LastInventoryAt` añadido al modelo `Agent` (visible en `last_seen`). Panel: tab Hardware real con `InventoryHardware.tsx`, format helpers (`formatBytes`, `formatUptime`, `formatRelativeFromNow`), botón "Solicitar inventario" con toast y auto-refresh a 3s. i18n: 30+ claves nuevas. Smoketest: tests #15-17 añaden shape de endpoints. Deuda técnica cerrada: tests puros para Fase 1 (`auth`, `tokens`, `agents`). Pendiente Fase 2.1: software (paquetes).
 - **v1.2** (jul-2026): sincronización del checklist §13 con el estado real del repo (todos los items de Fase 1 cerrados en código aunque la doc los marcaba `[ ]`). Se añade §13-bis *“Deuda técnica conocida — Fase 1”* con cinco items a cerrar antes/durante Fase 2-3 (DT-1 reconexión del agente, DT-2 threshold del dashboard, DT-3 JWT path, DT-4 tests unitarios, DT-5 jobs reales). Acciones ejecutadas en este lote: docs sincronizadas, agregación de tests puros `auth` + `tokens`, fix de `ProblemThreshold` → `OnlineThreshold`, mirror de “jobs penden” en README y mirror del grid 3×2 ya documentado en release notes.
 - **v1.1**: grupos jerárquicos, plantillas de comando, jobs, auditoría y dashboard suben a Fase 1; páginas de Agentes con tabs; seed de plantillas builtin.
   - **v1.1.1**: el endpoint `POST /api/v1/tokens` ahora devuelve `download_urls` (array de 6 URLs por plataforma) en lugar de un único `download_url`. El handler `GET /api/v1/agents/download` rechaza con `400 invalid_params` si faltan `?os=` o `?arch=` (ya no hace fallback a `runtime.GOOS` del server, que hacía que Docker Linux siempre sirviera binarios Linux sin importar el OS destino). El panel muestra grid 3×2 con auto-detección del cliente y badge "Detectado".
