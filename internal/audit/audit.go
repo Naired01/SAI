@@ -32,6 +32,7 @@ const (
 	ActionTokenRevoke         = "token.revoke"
 	ActionTokenConsumed       = "token.consumed" // enrolamiento exitoso
 	ActionAgentEnroll         = "agent.enroll"
+	ActionAgentReconnect      = "agent.reconnect" // hello de un (token,host) ya enrolado
 	ActionAgentDisconnect     = "agent.disconnect"
 	ActionAgentHeartbeatLost  = "agent.heartbeat_lost"
 	ActionAgentUpdate         = "agent.update"

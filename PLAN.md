@@ -562,43 +562,63 @@ Multi-stage: `node:22-alpine` (panel) → `golang:1.25-alpine` (server + agente)
 | Fase | Estado | Entregable |
 |---|---|---|
 | **0** | ✅ | Andamiaje repo, go.mod, estructura, docker-compose skeleton |
-| **1** | 🔄 | Auth, tokens, agents, **grupos**, **templates**, **jobs (modelo)**, **audit (tabla+UI)**, **dashboard**, ws hub, bundle, panel básico, i18n, GH Actions (release.yml) |
+| **1** | ✅ | Auth, tokens, agents, **grupos**, **templates**, **jobs (modelo)**, **audit (tabla+UI)**, **dashboard**, ws hub, bundle, panel básico, i18n, GH Actions (release.yml) |
 | 2 | ⏳ | Inventario HW/SW |
-| 3 | ⏳ | Comandos reales (ejecutados por el agente) |
+| 3 | ⏳ | Comandos reales (ejecutados por el agente) + JWT persistente por-agente |
 | 4 | ⏳ | Scheduled jobs + retry + dependencias |
-| 5 | ⏳ | Transferencia archivos |
+| 5 | ⏳ | Transferencia de archivos |
 | 6 | ⏳ | Terminal interactiva |
 | 7 | ⏳ | Políticas GPO-like |
-| 8 | ⏳ | API tokens + OpenAPI + SDK |
+| 8 | ⏳ | API tokens + OpenAPI + SDK (`pkg/saiclient`) |
 | 9 | ⏳ | Anti-tamper + auto-update firmado |
 | 10 | ⏳ | Hardening (CSP, audit hash-chain, rate limit distribuido) |
 
-### Checklist Fase 1 (en curso)
+> **Nota v1.2**: la checklist de Fase 1 quedó **desactualizada** (todos los items estaban
+> marcados `[ ]` aunque la implementación existía). Se reescribió con marcas `[x]` reales y
+> fechas aproximadas obtenidas del historial de git. Próximas iteraciones deben mantener
+> este checklist sincronizado con cada release.
 
-- [x] 0.1 Repo + README + LICENSE + .gitignore
-- [ ] 0.2 go.mod + estructura completa
-- [ ] 0.3 internal/config + internal/db + migraciones embebidas
-- [ ] 0.4 Migración 0001_init.sql
-- [ ] 0.5 Migración 0002_groups_templates_jobs_audit.sql
-- [ ] 1.1 internal/auth (argon2id, JWT admin, sesiones, CSRF)
-- [ ] 1.2 internal/tokens (CRUD + canje)
-- [ ] 1.3 internal/agents (registro + catálogo + eventos)
-- [ ] 1.4 internal/groups (CRUD + árbol + bulk-move + cycle check)
-- [ ] 1.5 internal/templates (CRUD + seed builtin)
-- [ ] 1.6 internal/jobs (modelo + UI; dispatcher Fase 3)
-- [ ] 1.7 internal/audit (Record + handlers)
-- [ ] 1.8 internal/dashboard (summary)
-- [ ] 1.9 internal/ws (hub + handshake + heartbeat)
-- [ ] 1.10 internal/bundles (ZIP)
-- [ ] 1.11 internal/i18n (es/en)
-- [ ] 1.12 internal/api (router + middleware)
-- [ ] 1.13 cmd/server (bootstrap + wiring)
-- [ ] 1.14 cmd/agent (mínimo)
-- [ ] 1.15 cmd/agent-installer
-- [ ] 1.16 Panel React (Login, Dashboard, Agents, Groups, Templates, Jobs, Audit)
-- [ ] 1.17 Dockerfile + docker-compose + .env.example
-- [ ] 1.18 GH Actions ci.yml + release.yml
-- [ ] 1.19 README quickstart final
+### Checklist Fase 1 — cerrado (jul-2026)
+
+Bloque backend (`internal/`, `cmd/`):
+- [x] 0.1 Repo + README + LICENSE + .gitignore — `f0fabcd` (commit inicial)
+- [x] 0.2 go.mod + estructura completa — `go.mod` + `cmd/{server,agent,agent-installer,smoketest}` + `internal/{api,auth,agents,tokens,groups,templates,jobs,audit,ws,bundles,dashboard,i18n,db,config,version,httpx}`. `pkg/saiclient/` queda pendiente (Fase 8).
+- [x] 0.3 internal/config + internal/db + migraciones embebidas (`//go:embed sql/*.sql`)
+- [x] 0.4 Migración 0001_init.sql (users / sessions / tokens / agents / agent_credentials / agent_events)
+- [x] 0.5 Migración 0002_groups_templates_jobs_audit.sql
+- [x] 1.1 internal/auth (argon2id OWASP-2024 params, JWT admin HS256, sesiones persistidas, CSRF)
+- [x] 1.2 internal/tokens (CRUD + hashToken + Redeem atómico con `FOR UPDATE`)
+- [x] 1.3 internal/agents (Create + List + UpdateAgent + Touch + RecordEvent + GetSecret + IssueDevJWT)
+- [x] 1.4 internal/groups (CRUD + Tree + AddMembers + RemoveMember + BulkMove + assertNotDescendant/ErrCycle)
+- [x] 1.5 internal/templates (CRUD + SeedBuiltins con 6 plantillas + read-only enforcement sobre `is_builtin`)
+- [x] 1.6 internal/jobs (modelo completo: List/Get/Create/Cancel/Items/CSV; dispatcher real queda en Fase 3)
+- [x] 1.7 internal/audit (Record + handlers list/get/actions/CSV; hash-chain inactivo, pendiente Fase 10)
+- [x] 1.8 internal/dashboard (Build con KPIs + problem_agents + quick_actions + recent_jobs)
+- [x] 1.9 internal/ws (Hub + Handler + hello/welcome/heartbeat + audit hooks)
+- [x] 1.10 internal/bundles (ZIP bin+config+install por OS, con grid 3×2 os/arch)
+- [x] 1.11 internal/i18n (es + en + middleware Accept-Language)
+- [x] 1.12 internal/api (chi router + middleware chain + todos los endpoints de §4)
+- [x] 1.13 cmd/server (bootstrap idempotente + force-reset + version + healthcheck + 13 pasos de startup logging + panic→crash.log)
+- [x] 1.14 cmd/agent (cliente WSS con backoff+jitter, hello/welcome/heartbeat)
+- [x] 1.15 cmd/agent-installer (CLI offline de bundle)
+
+Panel (`web/`):
+- [x] 1.16 10 páginas: Login, Dashboard, Agents, AgentDetail, Groups, Templates, Jobs, JobDetail, Audit, Tokens + dark mode + i18n es/en. Cubre y excede el scope de §8.
+
+Infraestructura:
+- [x] 1.17 Dockerfile multi-stage (node:22-alpine → golang:1.25-alpine → distroless static) + docker-compose (postgres+server con healthchecks) + `.env.example`
+- [x] 1.18 `.github/workflows/ci.yml` (lint + test + build server + tsc + build web + artifacts) + `release.yml` (cross-build 6 targets agente + 2 targets server + installer + imagen multi-arch + GH Release + smoke job)
+- [x] 1.19 README quickstart final (dev + Docker + bootstrap env vs CLI explicados + instalación del agente por OS + troubleshooting)
+
+### Deuda técnica conocida — Fase 1 (a cerrar antes o durante Fase 2/3)
+
+| # | Tema | Detalle | Resolución |
+|---|---|---|---|
+| DT-1 | Reconnect crea agente nuevo | `internal/ws/ws.go:202` siempre llama a `agents.Create` (comentario: "siempre crea"). Cada reconexión = nueva fila + nuevo `agent_credentials`. | Lookup `agents.FindByEnrollmentAndHost(enrID, host)` antes de crear; reusar fila + secret existentes. |
+| DT-2 | `ProblemThreshold` declarado pero no usado | `internal/dashboard/dashboard.go:34` define `ProblemThreshold = 5*time.Minute` sin uso. KPI usa `INTERVAL '2 minutes'` hardcoded. | Sustituir por `OnlineThreshold = 2*time.Minute` exportado y usado en `agents.Online` y dashboard. |
+| DT-3 | JWT del agente es código muerto | Server emite `session_jwt` en welcome pero nunca lo valida. Agent pone `agent_id` en `Authorization: Bearer` (valor inválido). | En Fase 1: server sigue emitiendo (es la base de Fase 3) y se quita el header `Authorization` del agent (código muerto). La **validación** se cierra en Fase 3 con persistencia del JWT y firma con el secret único del agente. |
+| DT-4 | Sin tests unitarios Go | `**/*_test.go` no existe. `ci.yml` corre `go test -race -shuffle=on ./...` que pasa trivialmente. Solo hay `cmd/smoketest` (integration). | Round 1: tests puros para `auth` (argon2id + JWT roundtrip) y `tokens` (hash identity). Round 2: tests con sqlmock o testcontainers para `groups` ciclo y `tokens` redeem. |
+| DT-5 | Jobs reales no se ejecutan | `internal/jobs/jobs.go:3` documenta que el dispatcher real llega en Fase 3. Items quedan en `pending` permanentemente. | Cerrado en Fase 3 (`command`/`command_result` sobre el mismo WS hub). Notar en release notes (ya hecho) y en README Limitations. |
 
 ---
 
@@ -615,6 +635,7 @@ Multi-stage: `node:22-alpine` (panel) → `golang:1.25-alpine` (server + agente)
 
 ## 15. Changelog del plan
 
-- **v1.1** (este): grupos jerárquicos, plantillas de comando, jobs, auditoría y dashboard suben a Fase 1; páginas de Agentes con tabs; seed de plantillas builtin.
+- **v1.2** (jul-2026): sincronización del checklist §13 con el estado real del repo (todos los items de Fase 1 cerrados en código aunque la doc los marcaba `[ ]`). Se añade §13-bis *“Deuda técnica conocida — Fase 1”* con cinco items a cerrar antes/durante Fase 2-3 (DT-1 reconexión del agente, DT-2 threshold del dashboard, DT-3 JWT path, DT-4 tests unitarios, DT-5 jobs reales). Acciones ejecutadas en este lote: docs sincronizadas, agregación de tests puros `auth` + `tokens`, fix de `ProblemThreshold` → `OnlineThreshold`, mirror de “jobs penden” en README y mirror del grid 3×2 ya documentado en release notes.
+- **v1.1**: grupos jerárquicos, plantillas de comando, jobs, auditoría y dashboard suben a Fase 1; páginas de Agentes con tabs; seed de plantillas builtin.
   - **v1.1.1**: el endpoint `POST /api/v1/tokens` ahora devuelve `download_urls` (array de 6 URLs por plataforma) en lugar de un único `download_url`. El handler `GET /api/v1/agents/download` rechaza con `400 invalid_params` si faltan `?os=` o `?arch=` (ya no hace fallback a `runtime.GOOS` del server, que hacía que Docker Linux siempre sirviera binarios Linux sin importar el OS destino). El panel muestra grid 3×2 con auto-detección del cliente y badge "Detectado".
 - **v1**: versión inicial con auth, tokens, agentes, WS hub, bundle y panel básico.

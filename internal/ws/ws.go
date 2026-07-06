@@ -199,17 +199,22 @@ func serveAgent(ctx context.Context, opts HandlerOptions, conn *websocket.Conn) 
 		return
 	}
 
-	// 3) Crear el agente (o reutilizar si es re-hello del mismo host? — Fase 1: siempre crea)
+	// 3) Reusar agente existente si (token, host) ya se enroló antes;
+	//    si no, crearlo. Antes de v1.2 esto siempre creaba una fila nueva
+	//    por cada reconexión, lo que llenaba `agents` de duplicados.
 	enrID := cr.TokenID
-	agent, secret, err := agents.Create(ctx, opts.Pool, enrID,
-		hello.Hostname, hello.OS, hello.OSVersion, hello.Arch, hello.AgentVersion, hello.Labels)
+	agent, secret, reconnect, err := findOrCreateAgent(ctx, opts, enrID, hello)
 	if err != nil {
-		opts.Logger.Error("agent create failed", "err", err)
-		sendError(conn, "internal", "could not create agent")
+		opts.Logger.Error("agent create/find failed", "err", err)
+		sendError(conn, "internal", "could not register agent")
 		return
 	}
 
-	// 4) Issue JWT de sesión para el agente
+	// 4) Issue JWT de sesión para el agente. En Fase 1 el JWT se emite
+	//    y devuelve al agent, pero el server todavía no lo valida en frames
+	//    posteriores: el agent no lo persiste (cada reconexión reusa
+	//    el enrollment token). La validación llega en Fase 3 con firma
+	//    usando `secret` (unique per-agent → revocación granular).
 	ttl := 1 * time.Hour
 	jwt, _, err := issueAgentJWT(opts.Secret, agent.ID, secret, ttl)
 	if err != nil {
@@ -236,13 +241,20 @@ func serveAgent(ctx context.Context, opts HandlerOptions, conn *websocket.Conn) 
 	defer opts.Hub.Unregister(agent.ID)
 
 	// Auditoría
+	action := audit.ActionAgentEnroll
+	if reconnect {
+		action = audit.ActionAgentReconnect
+	}
 	audit.Record(ctx, opts.Pool, audit.Event{
-		Actor:   audit.Actor{Type: "agent", ID: &agent.ID, Label: agent.Hostname},
-		Action:  audit.ActionAgentEnroll,
-		Target:  &audit.Target{Type: "token", ID: &enrID, Label: "enrollment_token"},
+		Actor:  audit.Actor{Type: "agent", ID: &agent.ID, Label: agent.Hostname},
+		Action: action,
+		Target: &audit.Target{Type: "token", ID: &enrID, Label: "enrollment_token"},
 		Request: nil, // sin http.Request en WS
 		Metadata: map[string]any{
-			"os": agent.OS, "arch": agent.Arch, "agent_version": agent.AgentVersion,
+			"os":           agent.OS,
+			"arch":         agent.Arch,
+			"agent_version": agent.AgentVersion,
+			"reconnect":    reconnect,
 		},
 	})
 	_ = agents.RecordEvent(ctx, opts.Pool, agent.ID, "connect", map[string]any{"at": time.Now()})
@@ -327,6 +339,23 @@ func sendError(conn *websocket.Conn, code, msg string) {
 // -----------------------------------------------------------------------------
 // Agent JWT (placeholder — Fase 3 lo formaliza)
 // -----------------------------------------------------------------------------
+
+// findOrCreateAgent busca el agente existente para (enrollment_id, hostname)
+// y, si no lo encuentra, lo crea. Devuelve reconnect=true cuando se reutilizó
+// (segundo o enésimo hello del mismo host con el mismo token).
+func findOrCreateAgent(ctx context.Context, opts HandlerOptions, enrID string, hello HelloMsg) (*agents.Agent, string, bool, error) {
+	if existing, secret, err := agents.FindByEnrollmentAndHost(ctx, opts.Pool, enrID, hello.Hostname); err == nil {
+		return existing, secret, true, nil
+	} else if !errors.Is(err, agents.ErrNotFound) {
+		return nil, "", false, err
+	}
+	a, secret, err := agents.Create(ctx, opts.Pool, enrID,
+		hello.Hostname, hello.OS, hello.OSVersion, hello.Arch, hello.AgentVersion, hello.Labels)
+	if err != nil {
+		return nil, "", false, err
+	}
+	return a, secret, false, nil
+}
 
 func issueAgentJWT(secret, agentID, agentSecret string, ttl time.Duration) (string, time.Time, error) {
 	// Por ahora usamos solo el secreto general; en Fase 3 firmamos con

@@ -23,6 +23,12 @@ const (
 	VisibilityInvisible = "invisible"
 )
 
+// OnlineThreshold es la ventana sin heartbeats a partir de la cual un agente se
+// considera offline. Single source of truth para `Agent.Online` y para los KPIs
+// del dashboard. Antes estaba duplicado como hardcoded `2 * time.Minute` y como
+// constante no usada `dashboard.ProblemThreshold = 5 * time.Minute`.
+const OnlineThreshold = 2 * time.Minute
+
 // Agent representa un agente enrolado.
 type Agent struct {
 	ID            string         `json:"id"`
@@ -77,7 +83,7 @@ func Create(ctx context.Context, pool *pgxpool.Pool, enrollmentID, hostname, osN
 		&a.LastSeenAt, &a.FirstSeenAt, &a.CreatedAt, &a.UpdatedAt); err != nil {
 		return nil, "", fmt.Errorf("insert agent: %w", err)
 	}
-	a.Online = a.LastSeenAt != nil && time.Since(*a.LastSeenAt) < 2*time.Minute
+	a.Online = a.LastSeenAt != nil && time.Since(*a.LastSeenAt) < OnlineThreshold
 
 	// Generar secreto JWT único por agente
 	secret, err := newSecret()
@@ -99,6 +105,34 @@ func Create(ctx context.Context, pool *pgxpool.Pool, enrollmentID, hostname, osN
 func Get(ctx context.Context, pool *pgxpool.Pool, id string) (*Agent, error) {
 	row := pool.QueryRow(ctx, agentSelect+` WHERE a.id = $1`, id)
 	return scanAgent(row)
+}
+
+// FindByEnrollmentAndHost devuelve el agente existente enrolado con el mismo
+// (enrollment_id, hostname) si lo hay, junto con su secreto JWT. Devuelve
+// (nil, "", ErrNotFound) si no existe — el caller debe entonces llamar a
+// Create. Se usa en el handshake WS para idempotenciar reconexiones: cada
+// (token, host) -> una sola fila en `agents` + un solo `agent_credentials`.
+func FindByEnrollmentAndHost(ctx context.Context, pool *pgxpool.Pool, enrollmentID, hostname string) (*Agent, string, error) {
+	if enrollmentID == "" || hostname == "" {
+		return nil, "", ErrNotFound
+	}
+	row := pool.QueryRow(ctx, agentSelect+`
+		WHERE a.enrollment_id = $1 AND a.hostname = $2
+		ORDER BY a.created_at DESC
+		LIMIT 1
+	`, enrollmentID, hostname)
+	a, err := scanAgent(row)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, "", ErrNotFound
+		}
+		return nil, "", err
+	}
+	secret, err := GetSecret(ctx, pool, a.ID)
+	if err != nil {
+		return nil, "", err
+	}
+	return a, secret, nil
 }
 
 // ListOptions filtros para List.
@@ -132,9 +166,13 @@ func List(ctx context.Context, pool *pgxpool.Pool, opts ListOptions) ([]*Agent, 
 		where = append(where, "NOT EXISTS (SELECT 1 FROM agent_group_members m WHERE m.agent_id = a.id)")
 	}
 	if opts.Status == "online" {
-		where = append(where, "a.last_seen_at IS NOT NULL AND a.last_seen_at > now() - INTERVAL '2 minutes'")
+		where = append(where, fmt.Sprintf("a.last_seen_at IS NOT NULL AND a.last_seen_at > $%d", idx))
+		args = append(args, time.Now().Add(-OnlineThreshold))
+		idx++
 	} else if opts.Status == "offline" {
-		where = append(where, "(a.last_seen_at IS NULL OR a.last_seen_at <= now() - INTERVAL '2 minutes')")
+		where = append(where, fmt.Sprintf("(a.last_seen_at IS NULL OR a.last_seen_at <= $%d)", idx))
+		args = append(args, time.Now().Add(-OnlineThreshold))
+		idx++
 	}
 	if s := strings.TrimSpace(opts.Search); s != "" {
 		where = append(where, fmt.Sprintf("(a.hostname ILIKE $%d OR a.os ILIKE $%d OR a.os_version ILIKE $%d)", idx, idx, idx))
@@ -346,7 +384,7 @@ func scanAgent(r rowScanner) (*Agent, error) {
 	}
 	a.EnrollmentID = enrollmentID
 	a.LastSeenAt = lastSeen
-	a.Online = lastSeen != nil && time.Since(*lastSeen) < 2*time.Minute
+	a.Online = lastSeen != nil && time.Since(*lastSeen) < OnlineThreshold
 	a.GroupIDs = groupIDs
 	if len(labelsRaw) > 0 {
 		_ = json.Unmarshal(labelsRaw, &a.Labels)

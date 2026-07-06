@@ -30,22 +30,28 @@ type KPIs struct {
 	RunningJobs   int `json:"running_jobs"`
 }
 
-// ProblemThreshold define cuándo un agente es considerado "con problemas".
-const ProblemThreshold = 5 * time.Minute
+// ProblemLookback limita la lista de "agentes con problemas" a los que
+// se vieron al menos una vez dentro de esta ventana. 30 días evita que
+// hosts apagados hace meses aparezcan en el dashboard.
+const ProblemLookback = 30 * 24 * time.Hour
 
-// Build compone el summary ejecutando las consultas en paralelo (secuencial
-// por simplicidad — son pocas y rápidas).
+// Build compone el summary ejecutando las consultas en serie (son pocas
+// y rápidas; no se justifica paralelizar a este nivel).
 func Build(ctx context.Context, pool *pgxpool.Pool) (*Summary, error) {
 	s := &Summary{}
+
+	now := time.Now()
+	onlineCutoff := now.Add(-agents.OnlineThreshold)
+	problemCutoff := now.Add(-ProblemLookback)
 
 	// KPIs
 	if err := pool.QueryRow(ctx, `
 		SELECT
-			COUNT(*) FILTER (WHERE last_seen_at IS NOT NULL AND last_seen_at > now() - INTERVAL '2 minutes') AS online,
-			COUNT(*) FILTER (WHERE last_seen_at IS NULL OR last_seen_at <= now() - INTERVAL '2 minutes') AS offline,
-			COUNT(*) FILTER (WHERE last_seen_at IS NOT NULL AND last_seen_at <= now() - INTERVAL '2 minutes' AND last_seen_at > now() - INTERVAL '30 days') AS problem
+			COUNT(*) FILTER (WHERE last_seen_at IS NOT NULL AND last_seen_at > $1) AS online,
+			COUNT(*) FILTER (WHERE last_seen_at IS NULL OR last_seen_at <= $1) AS offline,
+			COUNT(*) FILTER (WHERE last_seen_at IS NOT NULL AND last_seen_at <= $1 AND last_seen_at > $2) AS problem
 		FROM agents
-	`).Scan(&s.KPIs.AgentsOnline, &s.KPIs.AgentsOffline, &s.KPIs.AgentsProblem); err != nil {
+	`, onlineCutoff, problemCutoff).Scan(&s.KPIs.AgentsOnline, &s.KPIs.AgentsOffline, &s.KPIs.AgentsProblem); err != nil {
 		return nil, err
 	}
 	if err := pool.QueryRow(ctx, `
@@ -72,10 +78,11 @@ func Build(ctx context.Context, pool *pgxpool.Pool) (*Summary, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Filtrar para mostrar solo los "problemáticos" (los que alguna vez se vieron)
+	// Filtrar para mostrar solo los "problemáticos" (los que alguna vez se vieron
+	// dentro de ProblemLookback — los demás están en "Uncategorized" histórico).
 	filtered := problem[:0]
 	for _, a := range problem {
-		if a.LastSeenAt != nil {
+		if a.LastSeenAt != nil && now.Sub(*a.LastSeenAt) <= ProblemLookback {
 			filtered = append(filtered, a)
 		}
 	}

@@ -94,11 +94,12 @@ func runOnce(ctx context.Context, logger *slog.Logger, cfg *Config, hostname str
 		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 
+	// Fase 1: el handshake es siempre hello+token. El server emite un
+	// session_jwt en el welcome pero aún no lo validamos: el agent no lo
+	// persiste (cada reconexión reusa el enrollment token, que ya está
+	// idempotente en el server via FindByEnrollmentAndHost). La validación
+	// JWT llega en Fase 3.
 	headers := http.Header{}
-	if cfg.AgentID != "" {
-		// sesión existente (re-hello con JWT vigente)
-		headers.Set("Authorization", "Bearer "+cfg.AgentID)
-	}
 
 	logger.Info("connecting", "url", cfg.ServerURL)
 	conn, resp, err := dialer.Dial(cfg.ServerURL, headers)
