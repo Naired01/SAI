@@ -11,7 +11,7 @@ import type { InventoryHardware as Hardware } from '../lib/api'
 import { formatBytes, formatPercent, formatUptime } from '../lib/format'
 
 type Props = {
-  hardware: Hardware
+  hardware?: Hardware
   collectedAt?: string
   agentVersion?: string
   error?: string
@@ -19,6 +19,18 @@ type Props = {
 
 export function InventoryHardware({ hardware, collectedAt, agentVersion, error }: Props) {
   const { t } = useTranslation()
+  if (!hardware) {
+    return (
+      <div className="card p-8 text-center space-y-3">
+        <div className="text-slate-500 dark:text-slate-400 text-sm">
+          {t('inventory.software.empty.title')}
+        </div>
+        <div className="text-slate-400 dark:text-slate-500 text-xs">
+          {t('inventory.empty.hint')}
+        </div>
+      </div>
+    )
+  }
   const memUsedPct = formatPercent(hardware.memory?.used_bytes ?? 0, hardware.memory?.total_bytes ?? 0)
 
   return (

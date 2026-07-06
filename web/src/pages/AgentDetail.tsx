@@ -12,6 +12,7 @@ import {
   type InventorySnapshot,
 } from '../lib/api'
 import { InventoryHardware } from '../components/InventoryHardware'
+import { InventorySoftware } from '../components/InventorySoftware'
 import { formatRelativeFromNow } from '../lib/format'
 
 const TABS = ['info', 'hardware', 'software', 'commands', 'terminal', 'events', 'audit'] as const
@@ -116,12 +117,7 @@ export function AgentDetail() {
           error={inventoryError}
         />
       )}
-      {tab === 'software' && (
-        <div className="card p-8 text-center text-slate-500 dark:text-slate-400">
-          <div className="text-base font-medium">{t('agents.detail.software')}</div>
-          <div className="text-sm mt-1">{t('inventory.software.phase_2_1')}</div>
-        </div>
-      )}
+      {tab === 'software' && <SoftwareTab inventory={inventory} loading={inventoryLoading} />}
       {tab === 'commands' && <ComingSoon feature={t('agents.detail.commands')} />}
       {tab === 'terminal' && <ComingSoon feature={t('agents.detail.terminal')} />}
       {tab === 'events' && (
@@ -215,6 +211,20 @@ function HardwareTab({
       agentVersion={inventory.agent_version}
     />
   )
+}
+
+function SoftwareTab({
+  inventory,
+  loading,
+}: {
+  inventory: InventorySnapshot | undefined
+  loading: boolean
+}) {
+  const { t } = useTranslation()
+  if (loading) {
+    return <div className="card p-4 text-slate-500 dark:text-slate-400">{t('common.loading')}</div>
+  }
+  return <InventorySoftware software={inventory?.software} />
 }
 
 function ComingSoon({ feature }: { feature: string }) {

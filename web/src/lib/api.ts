@@ -253,8 +253,8 @@ export type InventorySnapshot = {
   agent_id: string
   received_at: string
   source: string
-  hardware: InventoryHardware
-  software: Record<string, unknown>
+  hardware?: InventoryHardware
+  software?: InventorySoftware
   agent_version: string
   schema_ver: number
 }
@@ -264,6 +264,38 @@ export type InventoryRefreshResponse = {
   request_id: string
   delivered: boolean
   stale: boolean
+}
+
+// Phase 2.1 — software blocks ----------------------------------------
+
+export type InventoryPackage = {
+  name: string
+  version: string
+  source?: string
+  publisher?: string
+}
+
+export type InventoryService = {
+  name: string
+  state: string
+  start_type?: string
+  source?: string
+}
+
+export type InventoryUpdate = {
+  name: string
+  current_version?: string
+  available_version?: string
+  severity?: string
+  source?: string
+}
+
+// v1 snapshot had no software block; v2 carries these. Keep them optional
+// so the UI can render either schema.
+export type InventorySoftware = {
+  packages?: InventoryPackage[]
+  services?: InventoryService[]
+  updates?: InventoryUpdate[]
 }
 
 export async function getInventory(agentId: string): Promise<InventorySnapshot> {

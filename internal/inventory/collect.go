@@ -85,10 +85,42 @@ func collectWith(ctx context.Context, opts CollectorOpts, agentVersion string) S
 		snap.Hardware.Network = n
 	}
 
+	// Software: per-OS collector. Corre con su propio contexto acotado para
+	// no consumir el SLA del collector HW. Si el OS no tiene un package manager
+	// accesible (caso legítimo: Alpine sin apk, sandbox, etc.) o falla por
+	// permisos, lo tratamos como snapshot parcial pero NO marcamos Error.
+	sw, swErr := collectSoftwareWithTimeout(ctx, 6*time.Second)
+	snap.Software = sw
+	if swErr != "" {
+		// Sólo marcamos Error si encontramos ALGO (paquetes o servicios) pero
+		// algo falló a medias. Si no encontramos nada, es un sistema sin DB de
+		// paquetes — situación esperada.
+		if sw.ContainsSoftware() {
+			errs = append(errs, swErr)
+		}
+	}
+
 	if len(errs) > 0 {
 		snap.Error = strings.Join(errs, "; ")
 	}
 	return snap
+}
+
+// collectSoftwareWithTimeout corre el software collector con timeout duro para
+// evitar que un dpkg-query o Get-Package lento tumbe el snapshot completo.
+// Devuelve el Software populado (best-effort) y un mensaje de error si algo
+// falló.
+func collectSoftwareWithTimeout(parent context.Context, d time.Duration) (Software, string) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, d)
+	defer cancel()
+	sw := CollectSoftware(ctx, nil)
+	if !sw.ContainsSoftware() {
+		return sw, "no software data collected"
+	}
+	return sw, ""
 }
 
 // -----------------------------------------------------------------------------

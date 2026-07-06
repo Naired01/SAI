@@ -56,6 +56,44 @@ func TestSnapshotMsgValidateRejectsMissingHardware(t *testing.T) {
 	}
 }
 
+func TestSnapshotMsgValidateAcceptsV2WithoutHardware(t *testing.T) {
+	// Schema 2 permite snapshots sólo-software (HW sin permisos,
+	// p.ej. agentes en servidores muy restringidos).
+	s := &SnapshotMsg{
+		ID:        "x",
+		SchemaVer: 2,
+		Hardware:  nil,
+		Software:  &Software{Packages: []Package{{Name: "vim"}}},
+	}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("v2 without hardware should be valid: %v", err)
+	}
+}
+
+func TestSnapshotMsgValidateAcceptsV2WithBothBlocks(t *testing.T) {
+	s := &SnapshotMsg{
+		ID:        "x",
+		SchemaVer: 2,
+		Hardware:  &Hardware{Host: Host{Hostname: "h"}},
+		Software:  &Software{Packages: []Package{{Name: "vim"}}},
+	}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("v2 with both should be valid: %v", err)
+	}
+}
+
+func TestSnapshotMsgValidateAcceptsV1WithHardware(t *testing.T) {
+	s := &SnapshotMsg{
+		ID:        "x",
+		SchemaVer: 1,
+		Hardware:  &Hardware{Host: Host{Hostname: "h"}},
+		Software:  nil, // v1 no requiere software
+	}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("v1 with hardware should be valid: %v", err)
+	}
+}
+
 func TestSnapshotJSONRoundtrip(t *testing.T) {
 	original := Snapshot{
 		SchemaVer:    1,
