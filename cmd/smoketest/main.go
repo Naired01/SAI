@@ -2,16 +2,16 @@
 //
 //  1. /api/v1/health          (público)
 //  2. /api/v1/version         (público)
-//  3. POST /api/v1/auth/login (autenticación)
+//  3. /api/v1/auth/login      (autenticación)
 //  4. /api/v1/auth/me         (con cookie)
 //  5. /api/v1/dashboard/summary
 //  6. POST /api/v1/tokens     (crea enrollment token con CSRF)
 //  7. /api/v1/audit/events
-//  8. POST /api/v1/auth/logout
-//  9. /api/v1/inventory endpoints (Fase 2) — verifican shape de respuesta,
-//     404 si no hay inventario y 405/422 para id inválido. NO requiere un
+//  8. /api/v1/inventory endpoints (Fase 2) — verifican shape de respuesta,
+//     404 si no hay inventario y 400 para id inválido. NO requiere un
 //     agente real conectado; el flujo completo se valida en
 //     scripts/verify-docker.sh + un agente local.
+//  9. /api/v1/auth/logout
 //
 // Uso:
 //
@@ -225,44 +225,46 @@ func main() {
 	r = get("/api/v1/audit/events?per_page=5")
 	check("audit/events", r.status, 200, r.body)
 
-	// 13. Logout (POST con CSRF)
-	fmt.Println("[13] POST /api/v1/auth/logout (con CSRF)")
-	r = withCSRF(client, "POST", base+"/api/v1/auth/logout", csrf, nil)
-	check("logout", r.status, 200, r.body)
-
-	// 14. /auth/me post-logout (debe ser 401)
-	fmt.Println("[14] /api/v1/auth/me después de logout (debe ser 401)")
-	r = get("/api/v1/auth/me")
-	check("auth/me post-logout", r.status, 401, r.body)
-
-	// 15-17. Fase 2: endpoints de inventario. Como no hay agentes enrolados
+	// 13-15. Fase 2: endpoints de inventario. Como no hay agentes enrolados
 	// durante el smoketest, los GET deben devolver 404. El POST refresh
 	// devuelve 400 con UUID inválido. Verificamos el shape de respuesta del
-	// panel y la consistencia del contrato HTTP.
-	fmt.Println("[15] GET /api/v1/agents/{no-agent}/inventory (404 esperado)")
+	// panel y la consistencia del contrato HTTP.Estos tests requieren
+	// sesión activa: van ANTES del logout (test #16).
+	fmt.Println("[13] GET /api/v1/agents/{no-agent}/inventory (404 esperado)")
 	r = get("/api/v1/agents/00000000-0000-0000-0000-000000000000/inventory")
 	check("inventory latest con agente inexistente", r.status, 404, r.body)
 
-	fmt.Println("[16] GET /api/v1/agents/{no-agent}/inventory/history (200 con items=[])")
+	fmt.Println("[14] GET /api/v1/agents/{no-agent}/inventory/history (200 con items=[])")
 	r = get("/api/v1/agents/00000000-0000-0000-0000-000000000000/inventory/history?limit=10")
 	check("inventory history con agente inexistente", r.status, 200, r.body)
 	if r.status == 200 {
 		var h struct {
 			Items []map[string]any `json:"items"`
 		}
+		// Acepta items=[] o items=null cuando no hay agente.
 		_ = json.Unmarshal(r.body, &h)
-		if len(h.Items) != 0 {
-			fmt.Printf("         aviso: esperado items=[] cuando el agente no existe, got %d\n", len(h.Items))
+		if h.Items != nil && len(h.Items) != 0 {
+			fmt.Printf("         aviso: esperado items=[]/null cuando el agente no existe, got %d items\n", len(h.Items))
 		}
 	}
 
-	fmt.Println("[17] POST /api/v1/agents/{no}/inventory/refresh (400 id inválido)")
-	r = post("/api/v1/agents/no-valid-uuid/inventory/refresh", nil)
+	fmt.Println("[15] POST /api/v1/agents/{no}/inventory/refresh (400 id inválido)")
+	r = withCSRF(client, "POST", base+"/api/v1/agents/no-valid-uuid/inventory/refresh", csrf, nil)
 	check("inventory refresh con id inválido", r.status, 400, r.body)
 
-	// 15-17. Descarga de bundle ZIP para los 3 OS principales
+	// 16. Logout (POST con CSRF)
+	fmt.Println("[16] POST /api/v1/auth/logout (con CSRF)")
+	r = withCSRF(client, "POST", base+"/api/v1/auth/logout", csrf, nil)
+	check("logout", r.status, 200, r.body)
+
+	// 17. /auth/me post-logout (debe ser 401)
+	fmt.Println("[17] /api/v1/auth/me después de logout (debe ser 401)")
+	r = get("/api/v1/auth/me")
+	check("auth/me post-logout", r.status, 401, r.body)
+
+	// 18-20. Descarga de bundle ZIP para los 3 OS principales
 	fmt.Println()
-	fmt.Println("[15-17] Descarga de bundles (binarios del agente)")
+	fmt.Println("[18-20] Descarga de bundles (binarios del agente)")
 	for _, tgt := range []struct{ os, arch string }{
 		{"windows", "amd64"},
 		{"linux", "amd64"},
@@ -282,21 +284,21 @@ func main() {
 		}
 	}
 
-	// 18. Token sin canjear no debe servir bundle (otro token random)
-	fmt.Println("[18] /api/v1/agents/download con token inválido (debe ser 403)")
+	// 21. Token sin canjear no debe servir bundle (otro token random)
+	fmt.Println("[21] /api/v1/agents/download con token inválido (debe ser 403)")
 	r = downloadBundleRaw(base+"/api/v1/agents/download?token=invalid-token-xxx&os=windows&arch=amd64")
 	check("download token inválido", r.status, 403, r.body)
 
-	// 19. Descarga sin ?os= o sin ?arch= debe dar 400 (no fallback al server's OS)
-	fmt.Println("[19-20] Download sin ?os= o sin ?arch= debe ser 400")
+	// 22. Descarga sin ?os= o sin ?arch= debe dar 400 (no fallback al server's OS)
+	fmt.Println("[22] Download sin ?os= o sin ?arch= debe ser 400")
 	r = downloadBundleRaw(base + "/api/v1/agents/download?token=" + enrollToken)
 	check("download sin os/arch", r.status, 400, r.body)
 	r = downloadBundleRaw(base + "/api/v1/agents/download?token=" + enrollToken + "&os=windows")
 	check("download sin arch", r.status, 400, r.body)
 
-	// 21-23. Descarga de los 3 targets restantes (arm64) — valida que el array
+	// 23-24. Descarga de los 3 targets restantes (arm64) — valida que el array
 	// de download_urls funciona para todas las plataformas, no solo amd64.
-	fmt.Println("[21-23] Descarga de bundles arm64 (los 3 OS)")
+	fmt.Println("[23-24] Descarga de bundles arm64 (los 3 OS)")
 	for _, tgt := range []struct{ os, arch string }{
 		{"windows", "arm64"},
 		{"linux", "arm64"},
