@@ -11,6 +11,6 @@ import (
 func isWindowsService() bool { return false }
 
 // runAsService es un stub en plataformas no-Windows.
-func runAsService(name string, ctx context.Context, cancel context.CancelFunc, logger *slog.Logger, cfg *Config, hostname string) (bool, error) {
+func runAsService(name string, ctx context.Context, cancel context.CancelFunc, logger *slog.Logger, cfg *Config, hostname, jwtPath string) (bool, error) {
 	return false, nil
 }

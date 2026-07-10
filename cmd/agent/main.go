@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,16 +29,39 @@ type Config struct {
 	ServerURL       string         `json:"server_url"`
 	EnrollmentToken string         `json:"enrollment_token"`
 	AgentID         string         `json:"agent_id"`
+	// SessionJWT (Fase 3 / DT-3): JWT persistente firmado por el server
+	// con agent_credentials.jwt_secret. Se carga desde session.jwt al
+	// arrancar y reemplaza al enrollment_token en reconexiones. No se
+	// persiste en config.json por seguridad.
+	SessionJWT      string         `json:"-"`
 	Labels          map[string]any `json:"labels,omitempty"`
 	InsecureSkipTLS bool           `json:"insecure_skip_tls,omitempty"`
 	HeartbeatSecs   int            `json:"heartbeat_secs,omitempty"`
 }
 
+// errReauthRequired indica que el server rechazó el session_jwt (por
+// ejemplo, el secret fue rotado). El agente borra session.jwt y la
+// proxima reconexión cae al path legacy de enrollment_token.
+var errReauthRequired = errors.New("reauth_required: server rejected session jwt")
+
+// isJWTNonEmpty valida que un string parezca un JWT (tres segmentos
+// separados por '.'). Evita guardar session.jwt cuando el server v0.2.1
+// (que no emite jwt) responde con welcome vacío en ese campo.
+func isJWTNonEmpty(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	parts := strings.Split(s, ".")
+	return len(parts) == 3
+}
+
 func main() {
 	var (
-		cfgPath = flag.String("config", "", "Path al config.json")
-		showVer = flag.Bool("version", false, "Muestra la versión y sale")
-		logFile = flag.String("log-file", "", "Path al archivo de log (opcional; default = stderr)")
+		cfgPath  = flag.String("config", "", "Path al config.json")
+		showVer  = flag.Bool("version", false, "Muestra la versión y sale")
+		logFile  = flag.String("log-file", "", "Path al archivo de log (opcional; default = stderr)")
+		jwtFileF = flag.String("jwt-file", "", "Path al session.jwt (opcional; default = <dir(config)>/session.jwt)")
 	)
 	flag.Parse()
 
@@ -60,6 +85,21 @@ func main() {
 		cfg.HeartbeatSecs = 30
 	}
 
+	// Sesión JWT persistente (Fase 3 / DT-3): si existe el archivo session.jwt
+	// (de un arranque previo), lo cargamos en cfg.SessionJWT y el handshake
+	// lo usará en lugar del enrollment_token. Esto evita que el agente quede
+	// afuera si el enrollment_token se agota o se revoca tras el primer
+	// enrolamiento.
+	jwtPath := jwtFilePath(*cfgPath, *jwtFileF)
+	if jwtPath != "" {
+		if tok, err := loadJWT(jwtPath); err == nil {
+			cfg.SessionJWT = tok
+			logger.Info("loaded session jwt", "path", jwtPath, "len", len(tok))
+		} else if !errors.Is(err, ErrNoJWT) {
+			logger.Warn("session jwt load failed", "path", jwtPath, "err", err)
+		}
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -71,7 +111,7 @@ func main() {
 	// Modo servicio de Windows: el SCM arranca el binario directamente y
 	// espera que se registre via svc.Run. Si NO estamos bajo SCM, corremos
 	// el loop normal como proceso interactivo.
-	if ran, err := runAsService("sai-agent", ctx, cancel, logger, cfg, hostname); ran {
+	if ran, err := runAsService("sai-agent", ctx, cancel, logger, cfg, hostname, jwtPath); ran {
 		if err != nil {
 			logger.Error("service run failed", "err", err)
 			os.Exit(1)
@@ -79,17 +119,20 @@ func main() {
 		return
 	}
 
-	runMainLoop(ctx, logger, cfg, hostname)
+	runMainLoop(ctx, logger, cfg, hostname, jwtPath)
 }
 
 // runMainLoop es el loop de reconexion infinito: corre runOnce, espera con
 // backoff+jitter, reintenta. Termina cuando ctx se cancela (Ctrl-C, Stop
 // del SCM, etc.). Llamado directamente por main() en modo interactivo, y
 // desde la goroutine de saiService.Execute en modo servicio.
-func runMainLoop(ctx context.Context, logger *slog.Logger, cfg *Config, hostname string) {
+//
+// jwtPath es la ruta del session.jwt que runOnce persiste tras cada welcome
+// exitoso. Si está vacío, no persiste (modo deprecado sin Fase 3).
+func runMainLoop(ctx context.Context, logger *slog.Logger, cfg *Config, hostname, jwtPath string) {
 	backoff := time.Second
 	for {
-		if err := runOnce(ctx, logger, cfg, hostname); err != nil {
+		if err := runOnce(ctx, logger, cfg, hostname, jwtPath); err != nil {
 			logger.Warn("connection lost; will retry", "err", err, "backoff", backoff.String())
 		}
 		if ctx.Err() != nil {
@@ -108,21 +151,28 @@ func runMainLoop(ctx context.Context, logger *slog.Logger, cfg *Config, hostname
 	}
 }
 
-func runOnce(ctx context.Context, logger *slog.Logger, cfg *Config, hostname string) error {
+func runOnce(ctx context.Context, logger *slog.Logger, cfg *Config, hostname, jwtPath string) error {
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = 15 * time.Second
 	if cfg.InsecureSkipTLS {
 		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 
-	// Fase 1: el handshake es siempre hello+token. El server emite un
-	// session_jwt en el welcome pero aún no lo validamos: el agent no lo
-	// persiste (cada reconexión reusa el enrollment token, que ya está
-	// idempotente en el server via FindByEnrollmentAndHost). La validación
-	// JWT llega en Fase 3.
+	// Fase 3 (DT-3): el handshake admite dos caminos:
+	//   a) cfg.SessionJWT != ""  -> enviar Authorization: Bearer <jwt> en
+	//      headers. El server valida contra agent_credentials.jwt_secret.
+	//      Enrollment token NO se consume.
+	//   b) cfg.SessionJWT == ""  -> fallback legacy: enviar enrollment_token
+	//      en el cuerpo del hello. El server lo canjea via tokens.Redeem.
+	// Si el server rechaza el JWT (e.g. secret rotado), el server emite un
+	// error code "reauth_required"; runOnce devuelve un error especial
+	// para que el caller borre session.jwt y reintente con enrollment_token.
 	headers := http.Header{}
+	if cfg.SessionJWT != "" {
+		headers.Set("Authorization", "Bearer "+cfg.SessionJWT)
+	}
 
-	logger.Info("connecting", "url", cfg.ServerURL)
+	logger.Info("connecting", "url", cfg.ServerURL, "has_jwt", cfg.SessionJWT != "")
 	conn, resp, err := dialer.Dial(cfg.ServerURL, headers)
 	if err != nil {
 		if resp != nil {
@@ -133,7 +183,10 @@ func runOnce(ctx context.Context, logger *slog.Logger, cfg *Config, hostname str
 	defer conn.Close()
 	logger.Info("connected")
 
-	// 1) Enviar hello
+	// 1) Enviar hello. El campo `token` se manda siempre para mantener
+	// compat con server v0.2.1 (que solo mira el body). Cuando el server
+	// valide el JWT (v0.3.0+), aceptará el bearer del header y skipeará
+	// Redeem. Si el bearer falla, canjeamos el token normalmente.
 	hello := map[string]any{
 		"type":          "hello",
 		"token":         cfg.EnrollmentToken,
@@ -159,10 +212,33 @@ func runOnce(ctx context.Context, logger *slog.Logger, cfg *Config, hostname str
 		return fmt.Errorf("welcome parse: %w", err)
 	}
 	if welcome["type"] != "welcome" {
+		// Si el server respondió con un error (e.g. "reauth_required"),
+		// limpiamos el JWT persistido para forzar reenrollment.
+		if welcome["type"] == "error" {
+			if code, _ := welcome["code"].(string); code == "reauth_required" && jwtPath != "" {
+				logger.Warn("server rejected session jwt, clearing", "path", jwtPath)
+				_ = clearJWT(jwtPath)
+				cfg.SessionJWT = ""
+				return errReauthRequired
+			}
+		}
 		return fmt.Errorf("expected welcome, got %v", welcome["type"])
 	}
 	agentID, _ := welcome["agent_id"].(string)
 	logger.Info("welcomed", "agent_id", agentID)
+
+	// 2b) Persistir el session_jwt que el server acaba de emitir. Si el
+	// server está en v0.2.1 (no emite jwt), welcome["session_jwt"] será ""
+	// y saveJWT guardará un archivo vacío — guarded por isJWTNonEmpty abajo.
+	if jwtPath != "" {
+		if tok, _ := welcome["session_jwt"].(string); isJWTNonEmpty(tok) {
+			if err := saveJWT(jwtPath, tok); err != nil {
+				logger.Warn("save session jwt failed", "path", jwtPath, "err", err)
+			} else {
+				logger.Info("persisted session jwt", "path", jwtPath)
+			}
+		}
+	}
 
 	// 3) Loop: heartbeats + procesamiento de mensajes del server.
 	//

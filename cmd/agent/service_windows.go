@@ -20,11 +20,12 @@ import (
 // Cuando llega Stop/Shutdown del SCM, cancelamos el contexto y runMainLoop
 // termina; eso desbloquea svc.Run y el servicio sale.
 type saiService struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	logger  *slog.Logger
-	cfg     *Config
+	ctx      context.Context
+	cancel   context.CancelFunc
+	logger   *slog.Logger
+	cfg      *Config
 	hostname string
+	jwtPath  string
 }
 
 func (s *saiService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (ssec bool, errno uint32) {
@@ -37,7 +38,7 @@ func (s *saiService) Execute(args []string, r <-chan svc.ChangeRequest, changes 
 	go func() {
 		defer close(loopDone)
 		changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
-		runMainLoop(s.ctx, s.logger, s.cfg, s.hostname)
+		runMainLoop(s.ctx, s.logger, s.cfg, s.hostname, s.jwtPath)
 		changes <- svc.Status{State: svc.StopPending}
 	}()
 
@@ -74,10 +75,10 @@ func isWindowsService() bool {
 // si se ejecutó como servicio (en cuyo caso el binario debe salir tras
 // svc.Run retornar), false si no era un servicio y el caller debe
 // continuar con el loop normal.
-func runAsService(name string, ctx context.Context, cancel context.CancelFunc, logger *slog.Logger, cfg *Config, hostname string) (bool, error) {
+func runAsService(name string, ctx context.Context, cancel context.CancelFunc, logger *slog.Logger, cfg *Config, hostname, jwtPath string) (bool, error) {
 	if !isWindowsService() {
 		return false, nil
 	}
 	logger.Info("running as Windows service", "name", name)
-	return true, svc.Run(name, &saiService{ctx: ctx, cancel: cancel, logger: logger, cfg: cfg, hostname: hostname})
+	return true, svc.Run(name, &saiService{ctx: ctx, cancel: cancel, logger: logger, cfg: cfg, hostname: hostname, jwtPath: jwtPath})
 }
