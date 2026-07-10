@@ -173,7 +173,15 @@ func Handler(opts HandlerOptions) http.Handler {
 			opts.Logger.Error("ws upgrade failed", "err", err)
 			return
 		}
-		go serveAgent(r.Context(), opts, conn)
+		// Usamos context.Background() con cancelación manual al cerrar la
+		// conexión, en lugar de r.Context() (que se cancela tras el upgrade
+		// HTTP y rompe el Redeem con "context canceled"). El lifetime del
+		// contexto queda atado a la vida de la goroutine serveAgent.
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			defer cancel()
+			serveAgent(ctx, opts, conn)
+		}()
 	})
 }
 
