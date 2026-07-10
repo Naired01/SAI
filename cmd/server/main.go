@@ -23,6 +23,7 @@ import (
 	"github.com/Naired01/SAI/internal/db"
 	"github.com/Naired01/SAI/internal/i18n"
 	"github.com/Naired01/SAI/internal/inventory"
+	"github.com/Naired01/SAI/internal/jobs"
 	"github.com/Naired01/SAI/internal/templates"
 	"github.com/Naired01/SAI/internal/version"
 	"github.com/Naired01/SAI/internal/ws"
@@ -245,9 +246,13 @@ func main() {
 		}
 	}
 
-	// STEP 9: WS hub
+	// STEP 9: WS hub + jobs dispatcher (Fase 3 / DT-5). El dispatcher se
+	// crea aquí para que el api.Server pueda inyectarlo en el handler
+	// WS (case command_result -> dispatcher.HandleCommandResult). La
+	// goroutine de tick arranca en step 12c.
 	logger.Info("startup step", "step", "9/ws_hub", "msg", "initializing websocket hub")
 	hub := ws.NewHub()
+	dispatcher := jobs.NewDispatcher(pool.Pool, hub, logger)
 	logger.Info("startup ok", "step", "9/ws_hub")
 
 	// STEP 10: API server
@@ -263,6 +268,7 @@ func main() {
 		AgentJWTSecret: cfg.AgentJWTSecret,
 		Logger:         logger,
 		StartTime:      time.Now(),
+		Dispatcher:     dispatcher,
 	}
 	logger.Info("startup step", "step", "10/api_server", "msg", "building router")
 	router := api.NewRouter(srv)
@@ -317,6 +323,13 @@ func main() {
 		}
 	}()
 	logger.Info("startup ok", "step", "12b/inventory_purger")
+
+	// STEP 12c: Jobs dispatcher (Fase 3 / DT-5). El dispatcher se creó
+	// en step 9 (necesario para api.Server.Dispatcher); acá sólo
+	// arrancamos su goroutine de tick.
+	logger.Info("startup step", "step", "12c/dispatcher", "msg", "starting jobs dispatcher goroutine")
+	dispatcher.Start(ctx)
+	logger.Info("startup ok", "step", "12c/dispatcher")
 
 	// STEP 13: Listen (TCP bind + serve)
 	logger.Info("startup step", "step", "13/listen", "msg", "binding tcp and starting serve", "addr", cfg.Bind)

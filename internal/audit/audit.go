@@ -55,6 +55,13 @@ const (
 	ActionInventoryRequested  = "inventory.requested" // admin pidió refresh o server-push
 	ActionInventoryReceived   = "inventory.received"  // snapshot persistido
 	ActionInventoryFailed     = "inventory.failed"    // timeout o collector error
+
+	// Fase 3 / DT-5: lifecycle de job_items despachados al agente.
+	ActionJobDispatch          = "job.dispatch"        // server envio MsgCommand al agente
+	ActionJobItemComplete      = "job.item_complete"   // exit_code == 0
+	ActionJobItemFailed        = "job.item_failed"     // exit_code != 0
+	ActionJobItemTimeout       = "job.item_timeout"    // timeout del agente
+	ActionJobItemOffline       = "job.item_offline"    // agente no estaba conectado al dispatch
 )
 
 // Actor identifica quién ejecuta la acción.

@@ -17,6 +17,7 @@ import (
 	"github.com/Naired01/SAI/internal/httpx"
 	"github.com/Naired01/SAI/internal/i18n"
 	"github.com/Naired01/SAI/internal/version"
+	"github.com/Naired01/SAI/internal/ws"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,6 +36,11 @@ type Server struct {
 	Logger          *slog.Logger
 	StartTime       time.Time
 	refreshLimiter  *inventoryRateLimiter
+	// Dispatcher (Fase 3 / DT-5): lo recibe el handler WS para delegar
+	// los mensajes command_result. Se mantiene acá (no en el struct WSHubs)
+	// porque es opcional y WSHubs está pensado para operaciones de solo
+	// lectura/notify (SendTo, IsConnected).
+	Dispatcher ws.CommandResultHandler
 }
 
 // WSHubs define lo que los handlers del panel necesitan del hub WS.

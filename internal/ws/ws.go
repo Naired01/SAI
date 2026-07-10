@@ -167,6 +167,17 @@ type HandlerOptions struct {
 	Hub    *Hub
 	Secret string
 	Logger *slog.Logger
+	// Dispatcher (Fase 3 / DT-5): opcional. Si esta presente, el
+	// readerLoop delega los mensajes command_result al dispatcher
+	// para actualizar job_items y recalcular el status del job.
+	Dispatcher CommandResultHandler
+}
+
+// CommandResultHandler es la interfaz mínima que necesita el WS para
+// procesar command_result. Definida en ws para evitar import cycles
+// (jobs importa ws, no al reves). El dispatcher implementa esta interfaz.
+type CommandResultHandler interface {
+	HandleCommandResult(ctx context.Context, agentID string, raw []byte) error
 }
 
 // Handler devuelve un http.Handler que upgradea a WS.
@@ -343,8 +354,16 @@ func readerLoop(ctx context.Context, opts HandlerOptions, conn *websocket.Conn, 
 		case MsgError:
 			_ = agents.RecordEvent(ctx, opts.Pool, agentID, "agent_error", map[string]any{"raw": string(raw)})
 		case MsgCommandResult:
-			// Llegará en Fase 3; por ahora solo loggeamos.
-			opts.Logger.Debug("phase-3 message received", "type", msg.Type, "agent", agentID)
+			// Fase 3 / DT-5: el agente ejecutó el comando y devuelve
+			// stdout/stderr/exit_code. Delegamos al dispatcher que
+			// actualiza job_items y recalcula status agregado del job.
+			if opts.Dispatcher != nil {
+				if err := opts.Dispatcher.HandleCommandResult(ctx, agentID, raw); err != nil {
+					opts.Logger.Warn("command_result handler failed", "agent", agentID, "err", err)
+				}
+			} else {
+				opts.Logger.Warn("command_result received but dispatcher not wired", "agent", agentID)
+			}
 		case MsgInventorySnap:
 			handleInventorySnapshot(ctx, opts, agentID, raw)
 		}

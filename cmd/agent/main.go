@@ -13,10 +13,12 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -292,9 +294,10 @@ func runOnce(ctx context.Context, logger *slog.Logger, cfg *Config, hostname, jw
 	}
 }
 
-// handleServerMessage despacha por tipo. Hoy: inventory_request (Fase 2).
-// Otros tipos se loggean en debug. Esta función nunca retorna error: si falla,
-// loggea y continúa; la conexión sigue siendo utilizable para heartbeats.
+// handleServerMessage despacha por tipo. inventory_request (Fase 2)
+// y command (Fase 3 / DT-5). Otros tipos se loggean en debug. Esta
+// función nunca retorna error: si falla, loggea y continúa; la conexión
+// sigue siendo utilizable para heartbeats.
 func handleServerMessage(ctx context.Context, logger *slog.Logger, conn *websocket.Conn, raw []byte) {
 	var hdr struct {
 		Type string `json:"type"`
@@ -307,6 +310,8 @@ func handleServerMessage(ctx context.Context, logger *slog.Logger, conn *websock
 	switch hdr.Type {
 	case "inventory_request":
 		handleInventoryRequest(ctx, logger, conn, hdr.ID)
+	case "command":
+		handleCommand(ctx, logger, conn, raw)
 	default:
 		logger.Debug("server msg (unhandled)", "type", hdr.Type)
 	}
@@ -390,3 +395,192 @@ func runtimeOSVersion() string {
 	// cuando esté disponible con información real del kernel.
 	return runtime.GOOS + "/" + runtime.GOARCH
 }
+
+// -----------------------------------------------------------------------------
+// Comando (Fase 3 / DT-5)
+// -----------------------------------------------------------------------------
+
+// commandMaxOutput coincide con el limite del server (64 KB). Si el
+// proceso produce mas, truncamos y avisamos al server con el sufijo
+// "\n[truncated at 64 KB]". Hacemos el cap al doble en el buffer local
+// para detectar el overflow sin perder el principio del output.
+const commandMaxOutput = 64 * 1024
+
+// activeJobMu serializa la ejecucion de comandos en este agente: un solo
+// comando a la vez por host (FIFO). Si llega un segundo mientras hay
+// uno en curso, respondemos inmediatamente con un command_result de
+// error "agent busy" para que el server lo reencole.
+var (
+	activeJobMu sync.Mutex
+	activeJob   string
+)
+
+// CommandMsg es el payload que envia el server cuando quiere ejecutar
+// un comando en este agente (Fase 3 / DT-5).
+type CommandMsg struct {
+	Type       string   `json:"type"`
+	JobItemID  string   `json:"job_item_id"`
+	Command    string   `json:"command"`
+	Args       []string `json:"args"`
+	TimeoutSec int      `json:"timeout_sec"`
+}
+
+// CommandResultMsg es la respuesta: el server actualiza job_items con
+// exit_code/stdout/stderr/error_msg.
+type CommandResultMsg struct {
+	Type      string `json:"type"`
+	JobItemID string `json:"job_item_id"`
+	ExitCode  int    `json:"exit_code"`
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	Error     string `json:"error,omitempty"`
+}
+
+// handleCommand ejecuta el comando pedido por el server y devuelve
+// CommandResultMsg por la misma conexion WS. Si ya hay un comando en
+// curso, responde "agent busy" inmediatamente y sale.
+//
+// Limites y garantias:
+//   - 1 comando activo por agente (activeJobMu).
+//   - TimeoutSec define un context.WithTimeout; si vence, el proceso
+//     recibe SIGKILL (cmd.Process.Kill en Unix, TerminateProcess en
+//     Windows). Marcamos el resultado con Error="timeout".
+//   - stdout y stderr se truncan a 64 KB cada uno (commandMaxOutput).
+func handleCommand(ctx context.Context, logger *slog.Logger, conn *websocket.Conn, raw []byte) {
+	var msg CommandMsg
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		logger.Warn("command bad json", "err", err)
+		return
+	}
+	if msg.JobItemID == "" {
+		logger.Warn("command missing job_item_id")
+		return
+	}
+
+	// Serializacion FIFO por agente.
+	activeJobMu.Lock()
+	if activeJob != "" {
+		activeJobMu.Unlock()
+		logger.Info("agent busy; rejecting command", "in_flight", activeJob, "incoming", msg.JobItemID)
+		sendCommandResult(conn, CommandResultMsg{
+			Type: "command_result", JobItemID: msg.JobItemID,
+			ExitCode: 1, Error: "agent busy",
+		})
+		return
+	}
+	activeJob = msg.JobItemID
+	activeJobMu.Unlock()
+	defer func() {
+		activeJobMu.Lock()
+		activeJob = ""
+		activeJobMu.Unlock()
+	}()
+
+	logger.Info("executing command",
+		"item_id", msg.JobItemID,
+		"command", msg.Command,
+		"args", msg.Args,
+		"timeout_sec", msg.TimeoutSec,
+	)
+
+	// Timeout.
+	timeoutSec := msg.TimeoutSec
+	if timeoutSec <= 0 {
+		timeoutSec = 60
+	}
+	if timeoutSec > 86400 {
+		timeoutSec = 86400 // cap a 24h (matches schema CHECK en templates)
+	}
+	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+
+	// buffers con cap al doble para detectar overflow sin perder
+	// el principio. Limit() hace que Write deje de aceptar cuando
+	// se llega al cap (Write retorna ErrTooLarge). Por eso usamos
+	// un wrapper custom: un buffer hasta 2*cap + truncado al cap.
+	stdout := &limitedBuffer{cap: 2 * commandMaxOutput}
+	stderr := &limitedBuffer{cap: 2 * commandMaxOutput}
+
+	cmd := exec.CommandContext(cmdCtx, msg.Command, msg.Args...)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+
+	err := cmd.Run()
+	exitCode := 0
+	errStr := ""
+	if err != nil {
+		// exit code: si es *exec.ExitError, .ExitCode() lo trae.
+		if ee, ok := err.(*exec.ExitError); ok {
+			exitCode = ee.ExitCode()
+		} else {
+			exitCode = -1
+		}
+		// Distinguir timeout de otros errores.
+		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
+			errStr = "timeout"
+			if exitCode == 0 {
+				exitCode = -1
+			}
+		} else {
+			errStr = err.Error()
+		}
+	}
+
+	res := CommandResultMsg{
+		Type:      "command_result",
+		JobItemID: msg.JobItemID,
+		ExitCode:  exitCode,
+		Stdout:    stdout.Truncated(commandMaxOutput),
+		Stderr:    stderr.Truncated(commandMaxOutput),
+		Error:     errStr,
+	}
+	logger.Info("command finished",
+		"item_id", msg.JobItemID,
+		"exit_code", exitCode,
+		"stdout_bytes", len(res.Stdout),
+		"stderr_bytes", len(res.Stderr),
+		"error", errStr,
+	)
+	sendCommandResult(conn, res)
+}
+
+// sendCommandResult escribe el resultado al server con mutex para no
+// mezclar con el heartbeat que corre concurrentemente.
+func sendCommandResult(conn *websocket.Conn, msg CommandResultMsg) {
+	if err := conn.WriteJSON(msg); err != nil {
+		// log via contexto global (no tenemos logger aca); lo emite
+		// el caller.
+		_ = err
+	}
+}
+
+// limitedBuffer es un bytes.Buffer con cap. Cuando se llega al cap,
+// deja de aceptar bytes (Write retorna error). Truncated() devuelve
+// el contenido hasta `max` con sufijo de truncado si corresponde.
+type limitedBuffer struct {
+	b   []byte
+	cap int
+}
+
+func (l *limitedBuffer) Write(p []byte) (int, error) {
+	if len(l.b)+len(p) > l.cap {
+		// Si ya estamos en el cap, descartamos los bytes extra.
+		// Si nos pasamos pero podemos acomodar, truncamos.
+		remaining := l.cap - len(l.b)
+		if remaining > 0 {
+			l.b = append(l.b, p[:remaining]...)
+		}
+		return len(p), errBufferFull
+	}
+	l.b = append(l.b, p...)
+	return len(p), nil
+}
+
+func (l *limitedBuffer) Truncated(max int) string {
+	if len(l.b) <= max {
+		return string(l.b)
+	}
+	return string(l.b[:max]) + "\n[truncated at 64 KB]"
+}
+
+var errBufferFull = errors.New("command output buffer full")

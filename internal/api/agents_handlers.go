@@ -241,10 +241,11 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	handler := ws.Handler(ws.HandlerOptions{
-		Pool:   s.Pool,
-		Hub:    hub,
-		Secret: s.AgentJWTSecret,
-		Logger: s.Logger,
+		Pool:       s.Pool,
+		Hub:        hub,
+		Secret:     s.AgentJWTSecret,
+		Logger:     s.Logger,
+		Dispatcher: s.Dispatcher,
 	})
 	handler.ServeHTTP(w, r)
 }
