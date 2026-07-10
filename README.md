@@ -1,6 +1,6 @@
 # SAI
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/Naired01/SAI/releases)
+[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](https://github.com/Naired01/SAI/releases)
 [![Go](https://img.shields.io/badge/go-1.25+-00ADD8.svg)](https://go.dev)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -91,6 +91,16 @@ las cerrará en versiones futuras.
 | Hash-chain de auditoría | La tabla `audit_events` ya tiene `prev_hash` y `hash` (migración 0002), pero `audit.Record` no las popula. | **Fase 10** | Hardening. |
 
 ## Changelog
+
+### v0.2.1 (jul-2026) — 5 fixes de integración tras Perfil B + agente como servicio
+
+Cerrados durante pruebas end-to-end locales (server + agente enrollado en la misma máquina + servicio nativo de Windows):
+
+- **`clientIP` rompía el login con IPv6**: `r.RemoteAddr = "[::1]:54321"` se devolvía como `[::1]` (con brackets) por un parseo manual de `:`; Postgres rechazaba como `inet` y `POST /auth/login` retornaba 500. Reemplazado por `net.SplitHostPort`. Tests nuevos: `internal/api/auth_handlers_test.go` cubre IPv4, IPv6 loopback, IPv6 full, XFF primer hop, XRI, prioridad, sin puerto.
+- **WS handler cancelaba el contexto tras el upgrade**: `serveAgent` recibía `r.Context()` que el SCM/chi cancelaba después del upgrade, rompiendo `tokens.Redeem` con `context canceled`. Cambio a `context.WithCancel(context.Background())`.
+- **Agente entraba en loop de panic**: el patrón `default:` con `ReadMessage` no bloqueante seguía llamando `ReadMessage` miles de veces tras un error del server y disparaba el panic `repeated read on failed websocket connection` de gorilla. Refactor a reader goroutine dedicada con canales `msgCh` / `readErrCh`.
+- **Soporte nativo de Windows Service**: el binario ahora implementa `golang.org/x/sys/windows/svc`. Bajo SCM se registra correctamente y reporta `SERVICE_RUNNING` antes del timeout de 60s. Nuevo flag `--log-file` para redirigir `slog` a un archivo (sin stderr visible bajo servicio). `install.ps1` invoca el binario directo (sin `cmd.exe /c` wrapper) y le pasa `--log-file C:\Logs\SAI\agent.log`.
+- **Smoketest con orden incorrecto**: tests 13-15 (inventory endpoints con sesión) estaban después del logout; movidos antes. Test 15 (POST inventory/refresh con id inválido) usaba `post()` sin CSRF → 403; cambiado a `withCSRF`. Resultado: 27/27 tests OK.
 
 ### v0.2.0 (jul-2026) — Inventario HW + SW + deuda técnica Fase 1 cerrada
 
