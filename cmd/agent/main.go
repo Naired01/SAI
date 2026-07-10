@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -144,8 +143,32 @@ func runOnce(ctx context.Context, logger *slog.Logger, cfg *Config, hostname str
 	agentID, _ := welcome["agent_id"].(string)
 	logger.Info("welcomed", "agent_id", agentID)
 
-	// 3) Loop: heartbeats
+	// 3) Loop: heartbeats + procesamiento de mensajes del server.
+	//
+	// Usamos una goroutine reader dedicada que bloquea en ReadMessage y
+	// entrega cada mensaje por msgCh. Esto evita el patron anterior de
+	// `default:` con ReadMessage no bloqueante, que tras un error del server
+	// seguia llamando ReadMessage y disparaba el panic de gorilla
+	// "repeated read on failed websocket connection" tras ~1000 llamadas.
 	conn.SetReadDeadline(time.Time{})
+	msgCh := make(chan []byte, 16)
+	readErrCh := make(chan error, 1)
+	go func() {
+		defer close(msgCh)
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				readErrCh <- err
+				return
+			}
+			select {
+			case msgCh <- raw:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	hb := time.NewTicker(time.Duration(cfg.HeartbeatSecs) * time.Second)
 	defer hb.Stop()
 	for {
@@ -161,17 +184,13 @@ func runOnce(ctx context.Context, logger *slog.Logger, cfg *Config, hostname str
 			}); err != nil {
 				return fmt.Errorf("write heartbeat: %w", err)
 			}
-		default:
-			// lectura no bloqueante: si llega algo del server lo procesamos
-			conn.SetReadDeadline(time.Now().Add(1 * time.Second))
-			_, raw, err := conn.ReadMessage()
-			if err != nil {
-				if ne, ok := err.(net.Error); ok && ne.Timeout() {
-					continue
-				}
-				return err
+		case raw, ok := <-msgCh:
+			if !ok {
+				return fmt.Errorf("reader goroutine closed")
 			}
 			handleServerMessage(ctx, logger, conn, raw)
+		case err := <-readErrCh:
+			return fmt.Errorf("read: %w", err)
 		}
 	}
 }
