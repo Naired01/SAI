@@ -2,7 +2,9 @@ package api
 
 import (
 	"errors"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Naired01/SAI/internal/audit"
@@ -124,24 +126,28 @@ func (s *Server) handleCSRF(w http.ResponseWriter, r *http.Request) {
 }
 
 func clientIP(r *http.Request) string {
+	// X-Forwarded-For / X-Real-IP sólo se respetan cuando el server corre
+	// detrás de un reverse proxy. En desarrollo / conexión directa caen
+	// al RemoteAddr.
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		for i := 0; i < len(xff); i++ {
-			if xff[i] == ',' {
-				return xff[:i]
-			}
+		// Tomamos el primer hop (cliente original).
+		if i := strings.IndexByte(xff, ','); i >= 0 {
+			return strings.TrimSpace(xff[:i])
 		}
-		return xff
+		return strings.TrimSpace(xff)
 	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
 		return xri
 	}
-	addr := r.RemoteAddr
-	for i := len(addr) - 1; i >= 0; i-- {
-		if addr[i] == ':' {
-			return addr[:i]
-		}
+	// net.SplitHostPort maneja correctamente IPv4 ("1.2.3.4:5678"),
+	// IPv6 con brackets ("[::1]:5678" → "::1") y domain sockets. Antes
+	// escaneábamos ':' de derecha a izquierda, lo que para IPv6 con
+	// brackets devolvía "[::1]" — Postgres rechaza "[::1]" como tipo INET.
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
 	}
-	return addr
+	// Sin puerto (caso de algunos test o unix sockets): RemoteAddr entero.
+	return r.RemoteAddr
 }
 
 // helper
