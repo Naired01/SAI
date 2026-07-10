@@ -201,8 +201,10 @@ func renderInstallWindows(binaryName, serverURL string) string {
 		"}\n"+
 		"\n"+
 		"Write-Host \"[SAI] Creating service\"\n"+
-		"$binPath = '\"' + $InstallDir + '\\sai-agent.exe\" --config \"' + $InstallDir + '\\config.json\"'\n"+
 		"New-Item -ItemType Directory -Force -Path 'C:\\Logs\\SAI' | Out-Null\n"+
+		"# El binario acepta --log-file y rota en append. Lo invocamos directo\n"+
+		"# (sin cmd.exe wrapper) para que el SCM pueda monitorear su lifetime.\n"+
+		"$binPath = '\"' + $InstallDir + '\\sai-agent.exe\" --config \"' + $InstallDir + '\\config.json\" --log-file \"C:\\Logs\\SAI\\agent.log\"'\n"+
 		"\n"+
 		"# Requires admin\n"+
 		"sc.exe create $svcName binPath= $binPath start= delayed-auto depend= rpcss | Out-Null\n"+
@@ -213,7 +215,8 @@ func renderInstallWindows(binaryName, serverURL string) string {
 		"Start-Service -Name $svcName\n"+
 		"\n"+
 		"Write-Host \"[SAI] Done. Service '$svcName' is running.\"\n"+
-		"Write-Host \"[SAI] Logs: C:\\Logs\\SAI\\\"\n",
+		"Write-Host \"[SAI] Logs: C:\\Logs\\SAI\\agent.log\"\n"+
+		"Write-Host \"[SAI] To uninstall: Stop-Service sai-agent; sc.exe delete sai-agent; Remove-Item '$InstallDir' -Recurse -Force; Remove-Item 'C:\\Logs\\SAI' -Recurse -Force\"\n",
 		serverURL, binaryName)
 }
 
