@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -35,6 +36,7 @@ func main() {
 	var (
 		cfgPath = flag.String("config", "", "Path al config.json")
 		showVer = flag.Bool("version", false, "Muestra la versión y sale")
+		logFile = flag.String("log-file", "", "Path al archivo de log (opcional; default = stderr)")
 	)
 	flag.Parse()
 
@@ -47,7 +49,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := newLogger(*logFile)
 
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
@@ -66,6 +68,25 @@ func main() {
 		hostname = "unknown"
 	}
 
+	// Modo servicio de Windows: el SCM arranca el binario directamente y
+	// espera que se registre via svc.Run. Si NO estamos bajo SCM, corremos
+	// el loop normal como proceso interactivo.
+	if ran, err := runAsService("sai-agent", ctx, cancel, logger, cfg, hostname); ran {
+		if err != nil {
+			logger.Error("service run failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	runMainLoop(ctx, logger, cfg, hostname)
+}
+
+// runMainLoop es el loop de reconexion infinito: corre runOnce, espera con
+// backoff+jitter, reintenta. Termina cuando ctx se cancela (Ctrl-C, Stop
+// del SCM, etc.). Llamado directamente por main() en modo interactivo, y
+// desde la goroutine de saiService.Execute en modo servicio.
+func runMainLoop(ctx context.Context, logger *slog.Logger, cfg *Config, hostname string) {
 	backoff := time.Second
 	for {
 		if err := runOnce(ctx, logger, cfg, hostname); err != nil {
@@ -266,6 +287,25 @@ func loadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	return &c, nil
+}
+
+// newLogger devuelve un slog logger que escribe a stderr o, si se pasa
+// logFile, a ese archivo (creando el directorio si hace falta). Usado
+// cuando el agente corre como servicio de Windows y no hay stderr visible.
+func newLogger(logFile string) *slog.Logger {
+	if logFile == "" {
+		return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	}
+	if dir := filepath.Dir(logFile); dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		// Fallback a stderr si no se puede abrir el archivo.
+		fmt.Fprintf(os.Stderr, "open log file %q failed: %v; falling back to stderr\n", logFile, err)
+		return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	}
+	return slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }
 
 func runtimeOSVersion() string {
