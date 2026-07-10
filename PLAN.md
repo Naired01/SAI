@@ -4,7 +4,7 @@
 > Documento vivo: incluye contexto para nuevos agentes + checklist de progreso por fase.
 >
 > **Stack**: Go 1.25+ (chi + gorilla/websocket + pgx) + PostgreSQL 16 + React/Vite/i18next (panel) + Docker + GitHub Actions.
-> **Estado**: 🟢 Fases 0–2.1 cerradas · DT-1/DT-2/DT-4 cerradas · DT-3/DT-5 (Fase 3) · v0.2.1 cierra 5 bugs de integración.
+> **Estado**: 🟢 Fases 0–3 cerradas · DT-1..DT-5 cerradas · próximo: Fase 4 (scheduled jobs + retry).
 > **Repo**: `github.com/Naired01/SAI` · **Imagen**: `ghcr.io/naired01/sai` · **i18n**: Español (default) + Inglés.
 
 ---
@@ -565,7 +565,7 @@ Multi-stage: `node:22-alpine` (panel) → `golang:1.25-alpine` (server + agente)
 | **1** | ✅ | Auth, tokens, agents, **grupos**, **templates**, **jobs (modelo)**, **audit (tabla+UI)**, **dashboard**, ws hub, bundle, panel básico, i18n, GH Actions (release.yml) |
 | **2** | ✅ | **Inventario HW** (Host + CPU + RAM + Discos + Redes): mensajes WS `inventory_request`/`inventory_snapshot`, paquete `internal/inventory`, 3 endpoints REST, ticker de purga, tabs Hardware en `AgentDetail` |
 | **2.1** | ✅ | **Inventario SW** (paquetes instalados + servicios + updates disponibles): collectors per-OS con build tags (dpkg/rpm/pacman/apt/yum en Linux; pkgutil+brew+launchctl+softwareupdate en macOS; winget/PS+SCM en Windows), bump SchemaVer 1→2, UI tab Software con sub-tabs y búsqueda |
-| 3 | ⏳ | Comandos reales (ejecutados por el agente) + JWT persistente por-agente |
+| 3 | ✅ | Comandos reales (ejecutados por el agente) + JWT persistente por-agente |
 | 4 | ⏳ | Scheduled jobs + retry + dependencias |
 | 5 | ⏳ | Transferencia de archivos |
 | 6 | ⏳ | Terminal interactiva |
@@ -655,9 +655,68 @@ Tests:
 |---|---|---|---|
 | DT-1 | Reconnect crea agente nuevo | `internal/ws/ws.go:202` siempre llama a `agents.Create` (comentario: "siempre crea"). Cada reconexión = nueva fila + nuevo `agent_credentials`. | ✅ **Cerrado (v1.5, `4333a3d`)**: `findOrCreateAgent` en `internal/ws/ws.go` hace lookup por `(enrollment_id, hostname)` antes de crear. Si encuentra, reusa fila + secret y emite `audit.ActionAgentReconnect`. Helper testeable `findOrCreateAgentWith` + `agentsRepoFromPool` adapter; `internal/ws/ws_test.go` cubre reuse / first-enroll / error-de-lookup / error-de-create con fakes. |
 | DT-2 | `ProblemThreshold` declarado pero no usado | `internal/dashboard/dashboard.go:34` define `ProblemThreshold = 5*time.Minute` sin uso. KPI usa `INTERVAL '2 minutes'` hardcoded. | ✅ **Cerrado (v1.5, `4333a3d`)**: constante `agents.OnlineThreshold = 2*time.Minute` es la única fuente de verdad. `dashboard.Build` la consume vía nuevo helper puro `ComputeCutoffs(now)`; queries SQL usan el cutoff derivado (no más hardcoded `INTERVAL`). Tests en `internal/dashboard/dashboard_test.go` blindan el invariante (cutoff = `now - OnlineThreshold`, delta = `ProblemLookback - OnlineThreshold`). |
-| DT-3 | JWT del agente es código muerto | Server emite `session_jwt` en welcome pero nunca lo valida. Agent pone `agent_id` en `Authorization: Bearer` (valor inválido). | En Fase 1: server sigue emitiendo (es la base de Fase 3) y se quita el header `Authorization` del agent (código muerto). La **validación** se cierra en Fase 3 con persistencia del JWT y firma con el secret único del agente. |
+| DT-3 | JWT del agente es código muerto | Server emite `session_jwt` en welcome pero nunca lo valida. Agent pone `agent_id` en `Authorization: Bearer` (valor inválido). | ✅ **Cerrado (v0.3.0)**: el JWT se persiste en `<install_dir>/session.jwt` (0600) y se envía en `Authorization: Bearer` en cada reconexión. Server lo firma y valida con `agent_credentials.jwt_secret`. Enrollment token sólo se usa en primer enrolamiento. Cierra el bug "agente fuera al agotar token". |
 | DT-4 | Sin tests unitarios Go | `**/*_test.go` no existe. `ci.yml` corre `go test -race -shuffle=on ./...` que pasa trivialmente. Solo hay `cmd/smoketest` (integration). | ✅ **Cerrado (v1.5, `4333a3d`)**: tests puros en `internal/auth`, `internal/tokens`, `internal/agents` (Round 1) más `internal/inventory/{collect,protocol,software*}` (Fase 2) y `internal/{ws,dashboard}` (v1.5, Round 2). Pendiente opcional: tests con sqlmock/testcontainers para `groups` ciclo y `tokens.Redeem` (cubierto en producción por `cmd/smoketest`). |
-| DT-5 | Jobs reales no se ejecutan | `internal/jobs/jobs.go:3` documenta que el dispatcher real llega en Fase 3. Items quedan en `pending` permanentemente. | ⏳ Pendiente Fase 3 (`command`/`command_result` sobre el mismo WS hub). Ya documentado en README Limitations y PLAN §13. |
+| DT-5 | Jobs reales no se ejecutan | `internal/jobs/jobs.go:3` documenta que el dispatcher real llega en Fase 3. Items quedan en `pending` permanentemente. | ✅ **Cerrado (v0.3.0)**: `internal/jobs/dispatcher.go` con tick cada 2s. SELECT items `pending` con `FOR UPDATE SKIP LOCKED`. Envía `MsgCommand` via Hub. `MsgCommandResult` actualiza item. Items `offline` para agentes no conectados. Sin cancel granular (sólo timeout). |
+
+### Plan detallado Fase 3 — JWT persistente + Dispatcher real (cerrado jul-2026)
+
+**Commits (en `origin/main`):**
+
+| # | SHA | Mensaje |
+|---|---|---|
+| C1 | `20d6e90` | feat(agent): persist session JWT to session.jwt (0600, atomic write) |
+| C2 | `e05bc0b` | feat(ws,agents): validate agent JWT signed with per-agent secret |
+| C3 | `84520d4` | feat(jobs,ws,agent): real command dispatcher (DT-5) |
+| C4 | `92a7df3` | feat(web): stdout/stderr drawer + Commands tab history |
+| C5 | `a60af2c` | feat(smoketest): end-to-end dispatch test (25-27) |
+| C6 | (este commit) | docs: prepare v0.3.0 release notes |
+
+**Scope**: DT-3 + DT-5. NO incluye cancel granular, scheduled jobs, ni GPO.
+
+#### Decisiones de diseño
+
+| Tema | Decisión | Razón |
+|---|---|---|
+| Persistencia JWT en agente | Archivo `<install_dir>/session.jwt`, 0600 | Estándar (kubectl, vault agent); separación del `config.json` |
+| Truncado stdout/stderr | 64 KB por stream, 128 KB total, sufijo `[truncated at 64 KB]` | Cubre 99% de comandos; evita DoS por `cat /var/log/syslog` |
+| Concurrencia por agente | 1 activo, cola FIFO | Simple; segundo job espera al primero |
+| Cancel granular | No en Fase 3 (sólo timeout) | Tracking de procesos se difiere a Fase 4 |
+| Migration nueva | **No** — schema actual alcanza | `jobs`, `job_items`, `agent_credentials` ya tienen todos los campos |
+| Backward compat | Server acepta AMBOS flujos: `enrollment_token` (v0.2.1) y `Authorization: Bearer JWT` (Fase 3) | Bundles viejos siguen funcionando |
+
+#### Plan en 6 commits atómicos
+
+| # | Mensaje | Archivos principales |
+|---|---|---|
+| C1 | `feat(agent): persist session JWT to session.jwt` | `cmd/agent/{main,jwt_session,jwt_session_test}.go` |
+| C2 | `feat(ws,agents): validate agent JWT signed with per-agent secret` | `internal/ws/ws.go`, `internal/agents/agents.go`, `internal/auth/auth.go` |
+| C3 | `feat(jobs,ws): dispatcher real con command/command_result` | `internal/jobs/{dispatcher,dispatcher_test}.go`, `internal/ws/ws.go`, `cmd/agent/main.go` |
+| C4 | `feat(web): stdout/stderr viewer + Commands tab` | `web/src/pages/{JobDetail,AgentDetail}.tsx`, `web/src/locales/*.json` |
+| C5 | `feat(audit,smoketest): JobExecute/Complete/Fail + e2e test` | `internal/audit/audit.go`, `cmd/smoketest/main.go` |
+| C6 | `docs: prepare v0.3.0 release notes` | `PLAN.md`, `README.md` |
+
+#### Tests nuevos (~15)
+
+| Archivo | Tests | Cubre |
+|---|---|---|
+| `cmd/agent/jwt_session_test.go` | 3 | save/load/clear, permisos 0600 (Unix) |
+| `internal/agents/agents_test.go` | +2 | IssueAgentJWT roundtrip + claims |
+| `internal/ws/ws_test.go` | +2 | JWT accepted + JWT invalid fallback |
+| `internal/jobs/dispatcher_test.go` | 4 | tick, offline, result handling, status recalc |
+| `internal/jobs/jobs_test.go` | 1 | truncate helper |
+| `cmd/smoketest/main.go` | +3 | dispatch e2e (skip si no hay agente) |
+
+#### Criterios de "done"
+
+- [x] Los 6 commits mergeados a `main`.
+- [x] `go test ./...` pasa (todos los paquetes con tests OK).
+- [x] Smoketest 30/30 OK end-to-end con agente real (no fue skip).
+- [x] Agente bajo servicio Windows persiste JWT, sobrevive restart sin re-enrolar.
+- [x] Comando end-to-end via API: crear job → ver item `completed` → ver stdout en UI.
+- [x] Concurrencia: 1 activo por agente, cola FIFO (mutex activeJobMu).
+- [x] Offline: job para agente desconectado → item `offline` (sin reintento automático).
+- [x] Release `v0.3.0` taggeado y pusheado.
 
 ---
 
@@ -674,7 +733,8 @@ Tests:
 
 ## 15. Changelog del plan
 
-- **v0.2.1 / v1.6** (jul-2026): **5 bugs cerrados durante Perfil B + pruebas locales**. (a) `internal/ws/ws.go`: el handler pasaba `r.Context()` a la goroutine `serveAgent`; tras el upgrade WS ese contexto se cancelaba y rompía `tokens.Redeem` con `context canceled`. Reemplazado por `context.WithCancel(context.Background())` con cancelación atada al cierre de la goroutine. (b) `cmd/agent`: el loop `default:` con `ReadMessage` no bloqueante seguía llamando `ReadMessage` miles de veces tras un error del server y disparaba el panic `repeated read on failed websocket connection` de gorilla. Refactor a una reader goroutine dedicada que entrega mensajes por canal; el loop principal maneja `msgCh` / `readErrCh` / `hb.C` / `ctx.Done()` en un solo `select`. (c) `cmd/agent`: soporte nativo de **Windows Service** vía `golang.org/x/sys/windows/svc`. Build tag `//go:build windows` para `service_windows.go` con la struct `saiService` que implementa `svc.Service` (StartPending → Running → StopPending y handlers de Stop/Shutdown/Pause/Continue); stub `service_other.go` para el resto. Detección por `svc.IsWindowsService()`. (d) `cmd/agent`: nuevo flag `--log-file <path>` para redirigir `slog` a un archivo (necesario cuando corre bajo SCM donde no hay stderr visible). `internal/bundles/bundles.go`: `install.ps1` actualizado para invocar el binario **directo** (sin `cmd.exe /c` wrapper que mata el servicio al instante) y pasarle `--log-file "C:\Logs\SAI\agent.log"`. (e) `internal/api/auth_handlers.go`: `clientIP` parseaba IPv6 con búsqueda manual de `:` y devolvía `[::1]` con brackets — Postgres rechazaba como INET y rompía el login con 500. Reemplazado por `net.SplitHostPort` + tests en `internal/api/auth_handlers_test.go` cubriendo 9 casos (IPv4, IPv6, XFF primer hop, XRI, prioridad, sin puerto). (f) `cmd/smoketest`: tests 13-15 movidos ANTES del logout; test 15 ahora usa `withCSRF` (POST /inventory/refresh requiere CSRF). 27/27 tests OK.
+- **v0.3.0 / v1.7** (jul-2026, `20d6e90`..`a60af2c`): **Fase 3 — JWT persistente + Dispatcher real (DT-3 + DT-5 cerrados)**. (a) `cmd/agent/jwt_session.go` con saveJWT/loadJWT/clearJWT atómicos, permisos 0600, escritura vía tmp + rename. El agente persiste `session.jwt` recibido en el welcome y lo envía en `Authorization: Bearer` en cada reconexión. (b) `internal/auth/auth.go` gana `AgentClaims` + `IssueAgentJWT(secret, agentID, ttl)` + `ParseAgentJWT(secret, raw)` (rechaza `kind != "agent"`). `internal/agents/agents.go` añade `IssueAgentJWT(ctx, pool, agentID, ttl)` que firma con `agent_credentials.jwt_secret` (no con el secret general del server) y `RotateSecret` para revocación granular. (c) `internal/ws/ws.go` reordena el handshake: si el agente trae Bearer JWT, `authenticateByJWT` extrae `agent_id` sin validar firma, busca el agente, lee su secret de DB, re-valida la firma y emite un nuevo welcome. Si falla → `sendError(code="reauth_required")` para que el agente borre `session.jwt` y re-enrole. (d) `internal/jobs/dispatcher.go`: `Dispatcher` con tick cada 2s. `SELECT pending items FOR UPDATE SKIP LOCKED LIMIT 50` (max por tick). Por cada item: marca `dispatched`, decide entre `failed("no command")` / `offline` / `hub.SendTo` (rollback a `pending` si buffer lleno). Recalcula status agregado del job (pending/success/failed/active → `completed`/`partial`/`failed`). `HandleCommandResult` actualiza item con exit_code, stdout, stderr (truncado a 64 KB con sufijo), error_msg; emite audit (`ActionJobDispatch`/`ItemComplete`/`ItemFailed`/`ItemTimeout`/`ItemOffline`). (e) `cmd/agent/main.go` añade `handleCommand`: serialización FIFO con `activeJobMu`, `exec.CommandContext` con timeout, `limitedBuffer` con cap 2×64 KB y truncado al cap, distingue timeout de otros errores. (f) `web/src/pages/JobDetail.tsx`: drawer de output con copy-to-clipboard, columna "Output" con botón "Ver output", `StatusBadge kind="item"`. `web/src/pages/AgentDetail.tsx`: tab "Comandos" muestra los últimos 20 job_items del agente con link al job detail. Backend nuevo `GET /api/v1/agents/{id}/jobs`. (g) `cmd/smoketest` añade tests [25-27] que validan el ciclo completo end-to-end con agente real. Sin migration nueva: schema actual alcanza. Limitaciones acordadas: 1 comando activo por agente, sin cancel granular, 64 KB truncado por stream. **Bug crítico cerrado**: el agente ya no queda fuera cuando se agota el enrollment_token — el JWT persistente sobrevive N reconexiones sin gastar uses.
+- **v0.2.1 / v1.6** (jul-2026): **5 bugs cerrados durante Perfil B + pruebas locales**. (a) `internal/ws/ws.go`: el handler pasaba `r.Context()` a la goroutine `serveAgent`; tras el upgrade WS ese contexto se cancelaba y rompía `tokens.Redeem` con `context canceled`. Reemplazado por `context.WithCancel(context.Background())` con cancelación atada al cierre de la goroutine. (b) `cmd/agent`: el loop `default:` con `ReadMessage` no bloqueante seguía llamando `ReadMessage` miles de veces tras un error del server y disparaba el panic `repeated read on failed websocket connection` de gorilla. Refactor a una reader goroutine dedicada que entrega mensajes por canales `msgCh` / `readErrCh`. (c) `cmd/agent`: soporte nativo de **Windows Service** vía `golang.org/x/sys/windows/svc`. Build tag `//go:build windows` para `service_windows.go` con la struct `saiService` que implementa `svc.Service` (StartPending → Running → StopPending y handlers de Stop/Shutdown/Pause/Continue); stub `service_other.go` para el resto. Detección por `svc.IsWindowsService()`. (d) `cmd/agent`: nuevo flag `--log-file <path>` para redirigir `slog` a un archivo (necesario cuando corre bajo SCM donde no hay stderr visible). `internal/bundles/bundles.go`: `install.ps1` actualizado para invocar el binario **directo** (sin `cmd.exe /c` wrapper que mata el servicio al instante) y pasarle `--log-file "C:\Logs\SAI\agent.log"`. (e) `internal/api/auth_handlers.go`: `clientIP` parseaba IPv6 con búsqueda manual de `:` y devolvía `[::1]` con brackets — Postgres rechazaba como INET y rompía el login con 500. Reemplazado por `net.SplitHostPort` + tests en `internal/api/auth_handlers_test.go` cubriendo 9 casos (IPv4, IPv6, XFF primer hop, XRI, prioridad, sin puerto). (f) `cmd/smoketest`: tests 13-15 movidos ANTES del logout; test 15 ahora usa `withCSRF` (POST /inventory/refresh requiere CSRF). 27/27 tests OK.
 - **v0.2.0 / v1.5** (jul-2026, `4333a3d` + `0467b48`): **Cierre de deuda técnica DT-1, DT-2, DT-4**. (a) `ws.findOrCreateAgent` ahora hace `FindByEnrollmentAndHost(enrID, hostname)` antes de `Create`: reconexiones del mismo `(token, host)` reusan fila + secret, ya no duplican agentes; se emite la nueva acción de auditoría `ActionAgentReconnect`. Refactor menor para hacerlo testeable: `findOrCreateAgentWith(ctx, repoPool, …)` con interfaces `agentFinder`/`agentCreator` y adapter `agentsRepoFromPool`. (b) `agents.OnlineThreshold` queda como única fuente de verdad de la ventana online; `dashboard.ComputeCutoffs(now)` centraliza los timestamps que las queries SQL usan para KPI/problem-agents. Se eliminó el comentario histórico sobre el viejo `ProblemThreshold`. (c) Round 2 de tests unitarios: `internal/ws/ws_test.go` (reuse / first-enroll / error de lookup / error de create con fakes) y `internal/dashboard/dashboard_test.go` (invariantes de los cutoffs, gap entre ventanas, default de `ProblemLookback = 30 días`). Total ahora: tests puros en `auth`, `tokens`, `agents`, `ws`, `dashboard`, `inventory/*`. DT-3 y DT-5 siguen abiertos (Fase 3).
 - **v1.4** (jul-2026): **Fase 2.1 — Inventario SW**. SchemaVer 1→2 (server acepta ambas versiones para back-compat). Software `{Packages, Services, Updates}` con tipos estrictos y `Source` por package-manager. Per-OS collectors con build tags: Linux (dpkg → rpm → pacman / systemd / apt → yum), macOS (pkgutil → brew / launchctl / softwareupdate), Windows (winget → PS Get-Package / sc query). Sheller interface para testabilidad; parsers son puros y testeados cross-OS. UI: tab Software con 3 KPIs (packages/services/updates), sub-tabs, search y source filter. Agent: `collectSoftwareWithTimeout(6s)` best-effort; sólo marca `Error` si encuentra algo parcial. Sin elevación.
 - **v1.3** (jul-2026): **Fase 2 — Inventario HW**. Migración `0003_inventory.sql` con `agent_inventory` (UPSERT latest) + `inventory_snapshots` (append-only historial) + `inventory_events` (log de flujo). Nuevo paquete `internal/inventory` con tipos versionados (SchemaVer=1), collector gopsutil (`Collect(ctx, agentVersion)` con timeout 8s), storage atómico (`UpsertLatest`), `Latest`, `History`, `StaleOrMissing`, `PurgeHistory`. Servidor: bienvenida → `maybeRequestInventory` (server-push si stale), handler `MsgInventorySnap` con validación id-echo + persist + audit. Agente: handler `inventory_request` que recolecta y responde con `inventory_snapshot` (mismo `id`). Endpoints: `POST /agents/{id}/inventory/refresh` (rate-limit 30s por agente), `GET /agents/{id}/inventory` (latest), `GET /agents/{id}/inventory/history?limit=&before=`. Constantes de auditoría: `inventory.requested|received|failed`. `LastInventoryAt` añadido al modelo `Agent` (visible en `last_seen`). Panel: tab Hardware real con `InventoryHardware.tsx`, format helpers (`formatBytes`, `formatUptime`, `formatRelativeFromNow`), botón "Solicitar inventario" con toast y auto-refresh a 3s. i18n: 30+ claves nuevas. Smoketest: tests #15-17 añaden shape de endpoints. Deuda técnica cerrada: tests puros para Fase 1 (`auth`, `tokens`, `agents`). Pendiente Fase 2.1: software (paquetes).

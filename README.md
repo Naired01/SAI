@@ -1,6 +1,6 @@
 # SAI
 
-[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](https://github.com/Naired01/SAI/releases)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/Naired01/SAI/releases)
 [![Go](https://img.shields.io/badge/go-1.25+-00ADD8.svg)](https://go.dev)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -77,7 +77,7 @@ Hay **dos mecanismos independientes** y no hacen lo mismo:
 > causa reinicios del container (este era el bug de "loop infinito" que se
 > daba cuando ambos caminos compartían la rama que hacía `exit` tras bootstrap).
 
-## Limitaciones conocidas (Fase 3+)
+## Limitaciones conocidas (Fase 4+)
 
 Estas son funcionalidades cuyo modelo y UI existen pero que aún no están
 operativas hasta fases posteriores. **No las reportes como bug** — el plan
@@ -85,12 +85,25 @@ las cerrará en versiones futuras.
 
 | Limitación | Estado | Cuando se cierra | Detalle |
 |---|---|---|---|
-| Ejecución real de comandos | Los jobs se crean y aparecen en la UI (`/jobs`) pero los items quedan en `pending` | **Fase 3** | Llegará con los mensajes WS `command` / `command_result` y el dispatcher real sobre el mismo hub. El panel ya muestra el aviso `jobs.phase_notice`. |
-| Inventario de procesos / servicios en tiempo real | El inventario actual enumera servicios por su estado actual (running/stopped) en cada snapshot (cada 24h). Para ver procesos vivos en tiempo real hay que ir a Fase 3 (gestión de procesos) | **Fase 3** | Inventario = “estado en el momento de recolectar”; gestión = arranque/parada en vivo. |
-| Validación de JWT por-agente | El server emite `session_jwt` en el welcome, pero **no lo valida aún**: cada reconexión re-usa el enrollment token. El agent no persiste el JWT. | **Fase 3** | Firma con el secreto único de `agent_credentials` para revocación granular. |
+| Cancel granular de un item en `running` | Sólo el timeout del comando lo mata. No hay botón "Cancelar" por item. | **Fase 4** | Requiere `MsgCommandCancel` (server→agent) + tracking de procesos vivos en el agente. |
+| Scheduled jobs + retry + dependencias | Los jobs se crean y disparan inmediatamente. No hay scheduling ni auto-retry. | **Fase 4** | Cola persistente con `scheduled_at`, reintentos con backoff, dependencias entre jobs. |
+| Concurrencia por agente | 1 comando activo por agente (FIFO). Jobs simultáneos al mismo agente se encolan. | **Fase 6** | Permitir hasta N en paralelo con stream IDs. |
 | Hash-chain de auditoría | La tabla `audit_events` ya tiene `prev_hash` y `hash` (migración 0002), pero `audit.Record` no las popula. | **Fase 10** | Hardening. |
 
 ## Changelog
+
+### v0.3.0 (jul-2026) — Fase 3: JWT persistente + Dispatcher real
+
+Cierra DT-3 y DT-5 simultáneamente. **Bug crítico resuelto**: el agente ya
+no queda fuera cuando se agota el enrollment_token — el JWT persistente
+sobrevive N reconexiones sin gastar uses.
+
+- **JWT persistente por-agente** (`cmd/agent/jwt_session.go` + `internal/auth/auth.go` + `internal/agents/agents.go`): el agente persiste `session.jwt` recibido en el welcome a `<install_dir>/session.jwt` (0600, escritura atómica vía tmp+rename). En cada reconexión lo envía en `Authorization: Bearer`. El server valida el JWT contra `agent_credentials.jwt_secret` (no contra el secret general) usando `ParseAgentJWT` y rechaza tokens con `kind != "agent"`. Si el JWT es inválido/expirado, devuelve `reauth_required` y el agente borra `session.jwt` para re-enrolar. `agents.RotateSecret` permite revocación granular (no expuesto en API todavía).
+- **Dispatcher real de jobs** (`internal/jobs/dispatcher.go`): tick cada 2s. `SELECT pending items FOR UPDATE SKIP LOCKED LIMIT 50`. Por cada item: marca `dispatched`, decide entre `failed("no command")` / `offline` (agente no conectado) / `hub.SendTo` (con rollback a `pending` si el buffer del Hub está lleno). `HandleCommandResult` actualiza item con exit_code, stdout, stderr (truncado a 64 KB con sufijo `[truncated at 64 KB]`) y emite audit (`job.dispatch`/`job.item_complete`/`job.item_failed`/`job.item_timeout`/`job.item_offline`). `recalcJobStatuses` pasa job a `completed`/`partial`/`failed` cuando todos los items finalizan.
+- **Agente ejecuta comandos** (`cmd/agent/main.go`): `handleCommand` con `exec.CommandContext`, serialización FIFO via `activeJobMu` (1 activo por agente), `limitedBuffer` con cap 2×64 KB y truncado al cap, distingue `timeout` (context.DeadlineExceeded) de otros errores.
+- **UI** (`web/src/pages/JobDetail.tsx`, `AgentDetail.tsx`): drawer de output con copy-to-clipboard, columna "Output" con botón "Ver output", `StatusBadge kind="item"`. Tab "Comandos" en AgentDetail lista los últimos 20 job_items del agente. Nuevo endpoint `GET /api/v1/agents/{id}/jobs`.
+- **Smoketest end-to-end** (`cmd/smoketest/main.go`): tests [25-27] validan el ciclo completo con un agente real. Resultado: 30/30 tests passed.
+- **Tests nuevos**: `internal/agents/agents_test.go` (IssueAgentJWT roundtrip), `internal/jobs/jobs_test.go` (truncate + classifyResult), `cmd/agent/jwt_session_test.go` (10 tests). Sin migration nueva — el schema actual alcanzaba.
 
 ### v0.2.1 (jul-2026) — 5 fixes de integración tras Perfil B + agente como servicio
 
