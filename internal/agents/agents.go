@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/Naired01/SAI/internal/auth"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -331,24 +331,47 @@ func GetSecret(ctx context.Context, pool *pgxpool.Pool, agentID string) (string,
 	return s, err
 }
 
-// IssueDevJWT genera un JWT de sesión para el agente usando el secreto
-// general del servidor. En Fase 3 se firmará con el secreto único del
-// agente (agent_credentials.jwt_secret) para revocación granular.
-func IssueDevJWT(serverSecret, agentID string, ttl time.Duration) (string, time.Time, error) {
-	now := time.Now()
-	exp := now.Add(ttl)
-	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"iss":  "sai",
-		"sub":  agentID,
-		"iat":  now.Unix(),
-		"exp":  exp.Unix(),
-		"kind": "agent",
-	})
-	signed, err := tok.SignedString([]byte(serverSecret))
+// IssueAgentJWT genera un JWT firmado con el secret único del agente
+// (agent_credentials.jwt_secret). Esto permite revocación granular via
+// RotateSecret. Devuelve ErrNotFound si el agente no tiene fila en
+// agent_credentials (caso patológico; todos los agentes válidos tienen).
+func IssueAgentJWT(ctx context.Context, pool *pgxpool.Pool, agentID string, ttl time.Duration) (string, time.Time, error) {
+	secret, err := GetSecret(ctx, pool, agentID)
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	return signed, exp, nil
+	return auth.IssueAgentJWT(secret, agentID, ttl)
+}
+
+// IssueDevJWT queda como wrapper backward-compatible: firma con el
+// secret general del server. Se usa sólo en tests viejos; el código de
+// producción debe usar IssueAgentJWT (con el secret per-agente).
+func IssueDevJWT(serverSecret, agentID string, ttl time.Duration) (string, time.Time, error) {
+	return auth.IssueAgentJWT(serverSecret, agentID, ttl)
+}
+
+// RotateSecret genera un nuevo secret para el agente, lo persiste en
+// agent_credentials.jwt_secret y marca rotated_at = now(). Después de
+// llamarla, todos los JWT firmados con el secret anterior son inválidos
+// y el agente deberá re-enrolar (recibirá un nuevo JWT firmado con el
+// nuevo secret en su próximo welcome).
+func RotateSecret(ctx context.Context, pool *pgxpool.Pool, agentID string) error {
+	secret, err := newSecret()
+	if err != nil {
+		return err
+	}
+	tag, err := pool.Exec(ctx, `
+		UPDATE agent_credentials
+		SET jwt_secret = $1, rotated_at = now()
+		WHERE agent_id = $2
+	`, secret, agentID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // -----------------------------------------------------------------------------

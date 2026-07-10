@@ -130,6 +130,76 @@ func ParseJWT(secret, raw string) (*Claims, error) {
 }
 
 // -----------------------------------------------------------------------------
+// JWT de agente (Fase 3 / DT-3)
+// -----------------------------------------------------------------------------
+
+// AgentClaims son los claims del JWT firmado por el server con el secret
+// único de agent_credentials.jwt_secret. El cliente (agente) lo presenta
+// en `Authorization: Bearer <jwt>` en cada reconexión; el server lo valida
+// contra el secret almacenado y skipea Redeem del enrollment token.
+type AgentClaims struct {
+	AgentID string `json:"sub"`
+	Kind    string `json:"kind"`
+	jwt.RegisteredClaims
+}
+
+// IssueAgentJWT firma un JWT para un agente con el secret proporcionado
+// (que DEBE ser agent_credentials.jwt_secret del agente, NO el secret
+// general del server — eso es lo que hace posible la revocación granular
+// via RotateSecret).
+func IssueAgentJWT(secret, agentID string, ttl time.Duration) (string, time.Time, error) {
+	if secret == "" {
+		return "", time.Time{}, errors.New("auth: empty agent secret")
+	}
+	if agentID == "" {
+		return "", time.Time{}, errors.New("auth: empty agent id")
+	}
+	now := time.Now()
+	exp := now.Add(ttl)
+	claims := AgentClaims{
+		AgentID: agentID,
+		Kind:    "agent",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "sai",
+			Subject:   agentID,
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(exp),
+		},
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := tok.SignedString([]byte(secret))
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return signed, exp, nil
+}
+
+// ParseAgentJWT valida y devuelve los claims de un JWT de agente.
+// Rechaza algoritmos != HS256 para evitar alg=none y similares.
+func ParseAgentJWT(secret, raw string) (*AgentClaims, error) {
+	c := &AgentClaims{}
+	tok, err := jwt.ParseWithClaims(raw, c, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return []byte(secret), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !tok.Valid {
+		return nil, errors.New("invalid token")
+	}
+	if c.Kind != "agent" {
+		return nil, fmt.Errorf("unexpected kind: %q", c.Kind)
+	}
+	if c.AgentID == "" {
+		return nil, errors.New("missing agent id in claims")
+	}
+	return c, nil
+}
+
+// -----------------------------------------------------------------------------
 // Sesiones (persistidas en DB)
 // -----------------------------------------------------------------------------
 

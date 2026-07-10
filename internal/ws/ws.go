@@ -7,15 +7,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Naired01/SAI/internal/agents"
 	"github.com/Naired01/SAI/internal/audit"
+	"github.com/Naired01/SAI/internal/auth"
 	"github.com/Naired01/SAI/internal/inventory"
 	"github.com/Naired01/SAI/internal/tokens"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -41,12 +45,17 @@ const (
 type HelloMsg struct {
 	Type         string `json:"type"`
 	Token        string `json:"token"`
-	AgentVersion string `json:"agent_version"`
-	OS           string `json:"os"`
-	OSVersion    string `json:"os_version,omitempty"`
-	Arch         string `json:"arch,omitempty"`
-	Hostname     string `json:"hostname"`
-	Labels       map[string]any `json:"labels,omitempty"`
+	// Authorization (Fase 3 / DT-3): "Bearer <session_jwt>". Si está
+	// presente, el server intenta validar contra agent_credentials.jwt_secret
+	// ANTES de Redeem del enrollment token. Esto permite reconexiones
+	// idempotentes sin consumir uses del token.
+	Authorization string         `json:"authorization,omitempty"`
+	AgentVersion  string         `json:"agent_version"`
+	OS            string         `json:"os"`
+	OSVersion     string         `json:"os_version,omitempty"`
+	Arch          string         `json:"arch,omitempty"`
+	Hostname      string         `json:"hostname"`
+	Labels        map[string]any `json:"labels,omitempty"`
 }
 
 // WelcomeMsg es la respuesta del servidor.
@@ -201,7 +210,28 @@ func serveAgent(ctx context.Context, opts HandlerOptions, conn *websocket.Conn) 
 		return
 	}
 
-	// 2) Canjear token
+	// 2) Fase 3 / DT-3: si el agente trae Authorization: Bearer <jwt>,
+	//    intentamos validar contra el secret per-agente ANTES de
+	//    Redeem. Si el JWT es válido, skipeamos Redeem (no consume
+	//    uses del enrollment token), encontramos al agente por su
+	//    claim sub (= agent_id) y vamos directo a emitir un welcome
+	//    nuevo. Si el JWT es inválido/expirado/tampered, devolvemos
+	//    error code "reauth_required" para que el agente borre su
+	//    session.jwt y caiga al path legacy (Redeem).
+	bearer := bearerFromHeaders(hello.Authorization)
+	if bearer != "" {
+		if err := authenticateByJWT(ctx, opts, conn, hello, bearer); err != nil {
+			opts.Logger.Info("jwt auth failed; falling back to token", "err", err)
+			sendError(conn, "reauth_required", err.Error())
+			return
+		}
+		// authenticateByJWT emite el welcome y registra en el Hub.
+		return
+	}
+
+	// 3) Path legacy: canjear enrollment token. Una vez consumido,
+	//    el siguiente hello del mismo (token, host) hace lookup y
+	//    reusa la fila existente.
 	cr, err := tokens.Redeem(ctx, opts.Pool, hello.Token)
 	if err != nil {
 		opts.Logger.Info("token redeem failed", "err", err)
@@ -209,24 +239,22 @@ func serveAgent(ctx context.Context, opts HandlerOptions, conn *websocket.Conn) 
 		return
 	}
 
-	// 3) Reusar agente existente si (token, host) ya se enroló antes;
+	// 4) Reusar agente existente si (token, host) ya se enroló antes;
 	//    si no, crearlo. Antes de v1.2 esto siempre creaba una fila nueva
 	//    por cada reconexión, lo que llenaba `agents` de duplicados.
 	enrID := cr.TokenID
-	agent, secret, reconnect, err := findOrCreateAgent(ctx, opts, enrID, hello)
+	agent, _, reconnect, err := findOrCreateAgent(ctx, opts, enrID, hello)
 	if err != nil {
 		opts.Logger.Error("agent create/find failed", "err", err)
 		sendError(conn, "internal", "could not register agent")
 		return
 	}
 
-	// 4) Issue JWT de sesión para el agente. En Fase 1 el JWT se emite
-	//    y devuelve al agent, pero el server todavía no lo valida en frames
-	//    posteriores: el agent no lo persiste (cada reconexión reusa
-	//    el enrollment token). La validación llega en Fase 3 con firma
-	//    usando `secret` (unique per-agent → revocación granular).
+	// 5) Emitir welcome con session_jwt firmado per-agente. El agent
+	//    lo persiste en session.jwt y lo envía en el próximo hello
+	//    via Authorization: Bearer (ver authenticateByJWT arriba).
 	ttl := 1 * time.Hour
-	jwt, _, err := issueAgentJWT(opts.Secret, agent.ID, secret, ttl)
+	jwt, _, err := issueAgentJWTForAgent(ctx, opts, agent.ID, ttl)
 	if err != nil {
 		opts.Logger.Error("issue jwt failed", "err", err)
 		sendError(conn, "internal", "could not issue session")
@@ -519,9 +547,187 @@ func findOrCreateAgentWith(ctx context.Context, repo repoPool, enrID string, hel
 }
 
 func issueAgentJWT(secret, agentID, agentSecret string, ttl time.Duration) (string, time.Time, error) {
-	// Por ahora usamos solo el secreto general; en Fase 3 firmamos con
-	// agentSecret por-agente para revocación granular.
-	return agents.IssueDevJWT(secret, agentID, ttl)
+	// Backward-compat wrapper: ahora delega a IssueAgentJWT de agents que
+	// firma con el secret per-agente. El parámetro `secret` (serverSecret)
+	// queda ignorado intencionalmente: las llamadas internas deben usar
+	// issueAgentJWTForAgent.
+	_ = secret
+	return agents.IssueDevJWT(agentSecret, agentID, ttl)
+}
+
+// issueAgentJWTForAgent firma un JWT para un agente leyendo el secret
+// de agent_credentials. Usado por el path "legacy" (enrolamiento +
+// re-enrolamiento tras reauth_required).
+func issueAgentJWTForAgent(ctx context.Context, opts HandlerOptions, agentID string, ttl time.Duration) (string, time.Time, error) {
+	return agents.IssueAgentJWT(ctx, opts.Pool, agentID, ttl)
+}
+
+// bearerFromHeaders extrae un "Bearer <jwt>" del campo Authorization
+// del hello (gorilla/websocket no expone el header HTTP en el Upgrade
+// para WS, así que el cliente lo embebe en el cuerpo).
+// Devuelve "" si no hay bearer.
+func bearerFromHeaders(helloAuthz string) string {
+	if s := strings.TrimSpace(helloAuthz); s != "" {
+		if strings.HasPrefix(s, "Bearer ") {
+			return strings.TrimPrefix(s, "Bearer ")
+		}
+		return s
+	}
+	return ""
+}
+
+// authenticateByJWT valida el bearer contra agent_credentials.jwt_secret.
+// Si es válido, emite welcome con un nuevo JWT y registra en el Hub.
+// Si el agente no existe, devuelve error (caso raro: rotación de
+// agent_credentials que dejó la firma válida pero agent_id huérfano).
+func authenticateByJWT(ctx context.Context, opts HandlerOptions, conn *websocket.Conn, hello HelloMsg, bearer string) error {
+	// Parsear con secret temporal requiere conocer agent_id primero. Como
+	// el JWT firmado tiene `sub=agent_id`, podemos intentar ParseAgentJWT
+	// contra CADA secret conocido? No — sería O(N) por agente.
+	// Solución: extraemos agent_id del JWT sin validar firma, luego
+	// buscamos su secret en la DB y re-validamos. El JWT viene del
+	// cliente autenticado por TLS reverso (proxy) o por la red del admin
+	// (dev), así que un agent_id falso no es explotable: el siguiente
+	// paso es validar la firma con el secret REAL del agent_id claimed,
+	// y si no coincide, error.
+	parts := strings.Split(bearer, ".")
+	if len(parts) != 3 {
+		return errors.New("malformed jwt (expected 3 segments)")
+	}
+	claimsUnverified := &auth.AgentClaims{}
+	_, _, err := jwt.NewParser().ParseUnverified(bearer, claimsUnverified)
+	if err != nil {
+		return fmt.Errorf("parse unverified: %w", err)
+	}
+	if claimsUnverified.Kind != "agent" || claimsUnverified.AgentID == "" {
+		return errors.New("jwt missing kind=agent or sub")
+	}
+
+	// Buscar agente y su secret real en la DB.
+	agent, err := agents.Get(ctx, opts.Pool, claimsUnverified.AgentID)
+	if err != nil {
+		return fmt.Errorf("agent not found: %w", err)
+	}
+	secret, err := agents.GetSecret(ctx, opts.Pool, agent.ID)
+	if err != nil {
+		return fmt.Errorf("agent credentials missing: %w", err)
+	}
+
+	// Validar firma con secret real.
+	claims, err := auth.ParseAgentJWT(secret, bearer)
+	if err != nil {
+		return fmt.Errorf("jwt invalid: %w", err)
+	}
+	if claims.AgentID != agent.ID {
+		return errors.New("jwt sub mismatch")
+	}
+
+	// Opcional: si el agent_id del hello.Hostname no coincide con el del
+	// JWT, loggear warning pero aceptar (caso: hostname cambió, el
+	// operador lo borró de su host).
+	if hello.Hostname != "" && agent.Hostname != hello.Hostname {
+		opts.Logger.Warn("agent hostname drift",
+			"jwt_sub", claims.AgentID, "db_hostname", agent.Hostname, "hello_hostname", hello.Hostname)
+	}
+
+	// Touch + audit.
+	if err := agents.Touch(ctx, opts.Pool, agent.ID, time.Now()); err != nil {
+		opts.Logger.Warn("agent touch failed", "err", err)
+	}
+	audit.Record(ctx, opts.Pool, audit.Event{
+		Actor:  audit.Actor{Type: "agent", ID: &agent.ID, Label: agent.Hostname},
+		Action: audit.ActionAgentReconnect,
+		Target: &audit.Target{Type: "agent", ID: &agent.ID, Label: agent.Hostname},
+		Metadata: map[string]any{"auth": "jwt", "reconnect": true},
+	})
+	_ = agents.RecordEvent(ctx, opts.Pool, agent.ID, "connect", map[string]any{"auth": "jwt"})
+
+	// Emitir welcome con nuevo JWT (rotación de TTL).
+	ttl := 1 * time.Hour
+	tok, _, err := agents.IssueAgentJWT(ctx, opts.Pool, agent.ID, ttl)
+	if err != nil {
+		return fmt.Errorf("issue jwt: %w", err)
+	}
+	welcome := WelcomeMsg{
+		Type:       MsgWelcome,
+		AgentID:    agent.ID,
+		SessionJWT: tok,
+		ServerTime: time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := conn.WriteJSON(welcome); err != nil {
+		return fmt.Errorf("write welcome: %w", err)
+	}
+
+	// Registrar en el Hub. El readerLoop toma el control desde acá.
+	send := make(chan []byte, 32)
+	c := &Conn{AgentID: agent.ID, Send: send}
+	opts.Hub.Register(c)
+	go writerLoop(conn, send, make(chan struct{}))
+	conn.SetReadDeadline(time.Time{})
+	msgCh := make(chan []byte, 16)
+	readErrCh := make(chan error, 1)
+	go func() {
+		defer close(msgCh)
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				readErrCh <- err
+				return
+			}
+			select {
+			case msgCh <- raw:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	hb := time.NewTicker(time.Duration(30) * time.Second)
+	defer hb.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			_ = conn.WriteMessage(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutdown"))
+			opts.Hub.Unregister(agent.ID)
+			return nil
+		case <-hb.C:
+			if err := conn.WriteJSON(map[string]any{
+				"type": "heartbeat", "ts": time.Now().UTC().Format(time.RFC3339),
+			}); err != nil {
+				opts.Hub.Unregister(agent.ID)
+				return err
+			}
+		case raw, ok := <-msgCh:
+			if !ok {
+				opts.Hub.Unregister(agent.ID)
+				return errors.New("reader closed")
+			}
+			handleAgentMessage(ctx, opts, conn, agent.ID, raw)
+		case err := <-readErrCh:
+			opts.Hub.Unregister(agent.ID)
+			return fmt.Errorf("read: %w", err)
+		}
+	}
+}
+
+// handleAgentMessage despacha un mensaje recibido del agente en el path
+// de authenticateByJWT. Hoy solo maneja inventory_snapshot (Fase 2);
+// command_result llega en Fase 3 con el dispatcher (commit C3).
+func handleAgentMessage(ctx context.Context, opts HandlerOptions, conn *websocket.Conn, agentID string, raw []byte) {
+	var hdr struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &hdr); err != nil {
+		opts.Logger.Debug("agent msg bad json", "raw", string(raw))
+		return
+	}
+	switch hdr.Type {
+	case MsgInventorySnap:
+		handleInventorySnapshot(ctx, opts, agentID, raw)
+	default:
+		opts.Logger.Debug("agent msg unhandled", "type", hdr.Type)
+	}
 }
 
 // HeartbeatAckMsg construye el mensaje de ack.
