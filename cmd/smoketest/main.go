@@ -30,6 +30,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -316,6 +317,19 @@ func main() {
 		}
 	}
 
+	// 25-27. Fase 3 / DT-5: dispatch end-to-end. Requiere al menos un
+	// agente enrollado y conectado. Si no hay agentes (smoketest en CI),
+	// skipeamos con SKIP (no falla). En local con un agente corriendo,
+	// verifica que el ciclo pending -> dispatched -> completed funciona
+	// via la API y que el GET del item muestra stdout + exit_code.
+	fmt.Println("[25-27] Fase 3: dispatch end-to-end (skip si no hay agentes)")
+	p, skipped, fc := runDispatchE2E(base, "", client)
+	pass += p
+	fail += fc
+	if skipped {
+		fmt.Println("  [SKIP] no hay agentes conectados; los 3 tests se omiten")
+	}
+
 	// Resumen
 	fmt.Println()
 	fmt.Println("===============================================")
@@ -400,6 +414,151 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// runDispatchE2E ejecuta el ciclo dispatch end-to-end de Fase 3 / DT-5.
+// Devuelve (passed, skipped, failCount).
+//   - passed: cantidad de sub-tests que pasaron (0..3).
+//   - skipped: true si no hay agentes conectados (CI sin agente).
+//   - failCount: cantidad de sub-tests que fallaron.
+func runDispatchE2E(base, csrfIn string, client *http.Client) (passed int, skipped bool, failCount int) {
+	// Re-login porque el test 13 hizo logout y borra la cookie del jar.
+	email := os.Getenv("SAI_ADMIN_EMAIL")
+	password := os.Getenv("SAI_ADMIN_PASSWORD")
+	if email == "" {
+		email = "admin@sai.local"
+	}
+	if password == "" {
+		password = "Test#2026"
+	}
+	csrf := csrfIn
+	if csrf == "" {
+		csrf = "skipped-if-empty" // placeholder; will be replaced by login response
+	}
+	{
+		body, _ := json.Marshal(map[string]string{"email": email, "password": password})
+		req, _ := http.NewRequest("POST", base+"/api/v1/auth/login", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err == nil {
+			defer resp.Body.Close()
+			bb, _ := io.ReadAll(resp.Body)
+			var lr struct {
+				CSRF string `json:"csrf"`
+			}
+			_ = json.Unmarshal(bb, &lr)
+			if lr.CSRF != "" {
+				csrf = lr.CSRF
+			}
+		}
+	}
+
+	// 25. Listar agentes y tomar el primero.
+	r := do(client, "GET", base+"/api/v1/agents?per_page=1", nil)
+	if r.status != 200 {
+		fmt.Printf("  [FAIL] [25] GET /agents -> status=%d body=%s\n", r.status, truncate(string(r.body), 200))
+		return 0, false, 1
+	}
+	var listResp struct {
+		Items []struct {
+			ID       string `json:"id"`
+			Hostname string `json:"hostname"`
+		} `json:"items"`
+		Total int `json:"total"`
+	}
+	if err := json.Unmarshal(r.body, &listResp); err != nil {
+		fmt.Printf("  [FAIL] [25] GET /agents parse: %v\n", err)
+		return 0, false, 1
+	}
+	if listResp.Total == 0 || len(listResp.Items) == 0 {
+		return 0, true, 0 // SKIP
+	}
+	agentID := listResp.Items[0].ID
+	fmt.Printf("  [PASS] [25] GET /agents -> %d agentes, target=%s\n", listResp.Total, agentID)
+
+	// 26. Crear job inline target=agent con echo hello (cross-platform).
+	cmd := "cmd"
+	args := []string{"/c", "echo", "hello from smoketest"}
+	if runtime.GOOS != "windows" {
+		cmd = "sh"
+		args = []string{"-c", "echo 'hello from smoketest'"}
+	}
+	jobBody := map[string]any{
+		"name":           "smoketest-dispatch",
+		"source":         "inline",
+		"inline_command": cmd,
+		"inline_args":    args,
+		"inline_timeout": 10,
+		"target_type":    "agent",
+		"target_id":      agentID,
+	}
+	r = withCSRF(client, "POST", base+"/api/v1/jobs", csrf, jobBody)
+	if r.status != 201 {
+		fmt.Printf("  [FAIL] [26] POST /jobs -> status=%d body=%s\n", r.status, truncate(string(r.body), 200))
+		return 1, false, 1
+	}
+	var jobResp struct {
+		ID         string `json:"id"`
+		TotalItems int    `json:"total_items"`
+	}
+	if err := json.Unmarshal(r.body, &jobResp); err != nil {
+		fmt.Printf("  [FAIL] [26] parse: %v\n", err)
+		return 1, false, 1
+	}
+	if jobResp.TotalItems < 1 {
+		fmt.Printf("  [FAIL] [26] job sin items: %+v\n", jobResp)
+		return 1, false, 1
+	}
+	fmt.Printf("  [PASS] [26] POST /jobs -> job_id=%s items=%d\n", jobResp.ID, jobResp.TotalItems)
+
+	// 27. Esperar a que el item termine y verificar stdout.
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+		r = do(client, "GET", base+"/api/v1/jobs/"+jobResp.ID+"/items?per_page=10", nil)
+		if r.status != 200 {
+			continue
+		}
+		var itemsResp struct {
+			Items []struct {
+				ID       string `json:"id"`
+				Status   string `json:"status"`
+				ExitCode *int   `json:"exit_code"`
+				Stdout   string `json:"stdout"`
+				Stderr   string `json:"stderr"`
+				ErrorMsg string `json:"error_msg"`
+			} `json:"items"`
+		}
+		_ = json.Unmarshal(r.body, &itemsResp)
+		for _, it := range itemsResp.Items {
+			if it.Status == "completed" || it.Status == "failed" || it.Status == "timeout" || it.Status == "offline" {
+				if it.Status != "completed" {
+					fmt.Printf("  [FAIL] [27] item termino con status=%s exit=%v err=%q\n",
+						it.Status, derefIntPtr(it.ExitCode), it.ErrorMsg)
+					return 2, false, 1
+				}
+				if it.ExitCode == nil || *it.ExitCode != 0 {
+					fmt.Printf("  [FAIL] [27] exit_code != 0 (got %v)\n", it.ExitCode)
+					return 2, false, 1
+				}
+				if !strings.Contains(it.Stdout, "hello") {
+					fmt.Printf("  [FAIL] [27] stdout no contiene 'hello' (got %q)\n", truncate(it.Stdout, 80))
+					return 2, false, 1
+				}
+				fmt.Printf("  [PASS] [27] item completed: exit=0 stdout=%q\n", truncate(it.Stdout, 60))
+				return 3, false, 0
+			}
+		}
+	}
+	fmt.Printf("  [FAIL] [27] item no termino en 8s (ultimo status no era terminal)\n")
+	return 2, false, 1
+}
+
+func derefIntPtr(p *int) int {
+	if p == nil {
+		return -1
+	}
+	return *p
 }
 
 // _ silencia import no usado si en algún momento agregamos
