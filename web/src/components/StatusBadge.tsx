@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 
-type Kind = 'job' | 'token' | 'agent'
+type Kind = 'job' | 'item' | 'token' | 'agent'
 
 export function StatusBadge({ kind, value }: { kind: Kind; value: string }) {
   const { t } = useTranslation()
@@ -16,6 +16,28 @@ export function StatusBadge({ kind, value }: { kind: Kind; value: string }) {
       case 'cancelled': cls = 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'; break
     }
     return <span className={`badge ${cls}`}>{t(`jobs.status.${value}`, value)}</span>
+  }
+  // Item status (job_items): pending/dispatched/running/completed/
+  // failed/timeout/cancelled/offline. Compartimos paleta con job pero
+  // el namespace i18n es jobs.item.* para no chocar con el job agregado.
+  if (kind === 'item') {
+    switch (value) {
+      case 'pending':
+      case 'dispatched':
+        cls = 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200'; break
+      case 'running':
+        cls = 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'; break
+      case 'completed':
+        cls = 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'; break
+      case 'failed':
+      case 'offline':
+        cls = 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'; break
+      case 'timeout':
+        cls = 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'; break
+      case 'cancelled':
+        cls = 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'; break
+    }
+    return <span className={`badge ${cls}`}>{t(`jobs.item.${value}`, value)}</span>
   }
   if (kind === 'token') {
     if (value === 'active') cls = 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'

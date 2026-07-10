@@ -13,10 +13,23 @@ import {
 } from '../lib/api'
 import { InventoryHardware } from '../components/InventoryHardware'
 import { InventorySoftware } from '../components/InventorySoftware'
+import { StatusBadge } from '../components/StatusBadge'
 import { formatRelativeFromNow } from '../lib/format'
+import { Link } from 'react-router-dom'
 
 const TABS = ['info', 'hardware', 'software', 'commands', 'terminal', 'events', 'audit'] as const
 type Tab = typeof TABS[number]
+
+type AgentJobRow = {
+  id: string
+  job_id: string
+  job_name: string
+  status: string
+  exit_code?: number
+  error_msg?: string
+  started_at?: string
+  completed_at?: string
+}
 
 export function AgentDetail() {
   const { id } = useParams<{ id: string }>()
@@ -118,7 +131,8 @@ export function AgentDetail() {
         />
       )}
       {tab === 'software' && <SoftwareTab inventory={inventory} loading={inventoryLoading} />}
-      {tab === 'commands' && <ComingSoon feature={t('agents.detail.commands')} />}
+      {tab === 'commands' && <CommandsTab agentId={id} />}
+      {tab === 'terminal' && <ComingSoon feature={t('agents.detail.terminal')} />}
       {tab === 'terminal' && <ComingSoon feature={t('agents.detail.terminal')} />}
       {tab === 'events' && (
         <div className="card p-4">
@@ -233,6 +247,64 @@ function ComingSoon({ feature }: { feature: string }) {
     <div className="card p-8 text-center text-slate-500 dark:text-slate-400">
       <div className="text-base font-medium">{feature}</div>
       <div className="text-sm mt-1">{t('agents.detail.coming_soon')}</div>
+    </div>
+  )
+}
+
+// CommandsTab muestra los ultimos 20 job_items del agente con link
+// al detalle del job. Sustituye al placeholder ComingSoon de la tab
+// "commands" que existia desde Fase 1.
+function CommandsTab({ agentId }: { agentId?: string }) {
+  const { t } = useTranslation()
+  const { data, isLoading } = useQuery({
+    queryKey: ['agent-jobs', agentId],
+    queryFn: () => get<{ items: AgentJobRow[]; total: number }>(`/api/v1/agents/${agentId}/jobs?limit=20`),
+    enabled: !!agentId,
+    refetchInterval: 10_000,
+  })
+  if (!agentId) return null
+  if (isLoading) return <div className="card p-4 text-slate-500 dark:text-slate-400 text-sm">{t('common.loading')}</div>
+  const items = data?.items || []
+  if (!items.length) {
+    return (
+      <div className="card p-8 text-center text-slate-500 dark:text-slate-400">
+        <div className="text-sm">{t('agents.detail.no_jobs')}</div>
+        <Link to="/jobs" className="text-xs text-brand-600 hover:underline mt-2 inline-block">
+          {t('nav.jobs')} →
+        </Link>
+      </div>
+    )
+  }
+  return (
+    <div className="card overflow-hidden">
+      <h2 className="font-semibold p-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+        <span>{t('agents.detail.recent_jobs')}</span>
+        <Link to="/jobs" className="text-xs text-brand-600 hover:underline">{t('jobs.title')} →</Link>
+      </h2>
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Job</th>
+            <th>Status</th>
+            <th>Exit</th>
+            <th>Started</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((it) => (
+            <tr key={it.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/40">
+              <td className="text-sm">
+                <Link to={`/jobs/${it.job_id}`} className="text-brand-600 hover:underline">{it.job_name}</Link>
+              </td>
+              <td><StatusBadge kind="item" value={it.status} /></td>
+              <td className="text-xs font-mono">{it.exit_code ?? '—'}</td>
+              <td className="text-xs text-slate-500 dark:text-slate-400">{it.started_at ? formatRelativeFromNow(it.started_at) : '—'}</td>
+              <td className="text-xs text-red-700 dark:text-red-400 truncate max-w-[200px]">{it.error_msg}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }

@@ -133,6 +133,60 @@ func (s *Server) handleJobsItem(w http.ResponseWriter, r *http.Request) {
 	httpx.RenderJSON(w, http.StatusOK, it)
 }
 
+// handleAgentJobs GET /api/v1/agents/{id}/jobs
+//
+// Devuelve los ultimos N job_items del agente con el nombre del job
+// incluido, ordenados por created_at desc. Usado por la tab "Comandos"
+// de AgentDetail para mostrar el historial reciente.
+func (s *Server) handleAgentJobs(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "id")
+	limit := httpx.QueryInt(r, "limit", 20)
+	if limit <= 0 || limit > 200 {
+		limit = 20
+	}
+	rows, err := s.Pool.Query(r.Context(), `
+		SELECT i.id, i.job_id, i.status, i.exit_code, i.error_msg,
+		       i.started_at, i.completed_at, j.name AS job_name
+		FROM job_items i
+		JOIN jobs j ON j.id = i.job_id
+		WHERE i.agent_id = $1
+		ORDER BY i.created_at DESC
+		LIMIT $2
+	`, agentID, limit)
+	if err != nil {
+		s.Logger.Error("agent jobs query", "agent_id", agentID, "err", err)
+		httpx.RenderInternalError(w, r, s.Bundle)
+		return
+	}
+	defer rows.Close()
+	type row struct {
+		JobItemID    string     `json:"id"`
+		JobID        string     `json:"job_id"`
+		JobName      string     `json:"job_name"`
+		Status       string     `json:"status"`
+		ExitCode     *int       `json:"exit_code,omitempty"`
+		ErrorMsg     string     `json:"error_msg,omitempty"`
+		StartedAt    *time.Time `json:"started_at,omitempty"`
+		CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	}
+	var out []row
+	for rows.Next() {
+		var item row
+		if err := rows.Scan(&item.JobItemID, &item.JobID, &item.Status, &item.ExitCode, &item.ErrorMsg,
+			&item.StartedAt, &item.CompletedAt, &item.JobName); err != nil {
+			s.Logger.Error("agent jobs scan", "err", err)
+			httpx.RenderInternalError(w, r, s.Bundle)
+			return
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		httpx.RenderInternalError(w, r, s.Bundle)
+		return
+	}
+	httpx.RenderJSON(w, http.StatusOK, map[string]any{"items": out, "total": len(out)})
+}
+
 // handleJobsExportCSV GET /api/v1/jobs/{id}/export.csv
 func (s *Server) handleJobsExportCSV(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

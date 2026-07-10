@@ -132,6 +132,10 @@ func NewRouter(s *Server) http.Handler {
 			r.Get("/{id}/export.csv", s.handleJobsExportCSV)
 		})
 
+		// Agent-scoped job history (Fase 3). Usado por la tab "Comandos"
+		// de AgentDetail.
+		r.Get("/agents/{id}/jobs", s.handleAgentJobs)
+
 		r.Route("/audit", func(r chi.Router) {
 			r.Get("/events", s.handleAuditList)
 			r.Get("/events/{id}", s.handleAuditGet)
